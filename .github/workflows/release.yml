@@ -1,0 +1,135 @@
+name: Build Windows Release
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout radiance repository
+        uses: actions/checkout@v4
+        with:
+          path: radiance
+
+      - name: Checkout libmpv-static-build repository
+        uses: actions/checkout@v4
+        with:
+          repository: ervanalb/libmpv-static-build
+          path: libmpv-static-build
+
+      - name: Get libmpv-static-build commit hash
+        id: libmpv-hash
+        run: |
+          cd libmpv-static-build
+          echo "hash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Cache libmpv static build
+        id: cache-libmpv
+        uses: actions/cache@v4
+        with:
+          path: libmpv-static-build/output
+          key: libmpv-static-${{ runner.os }}-${{ steps.libmpv-hash.outputs.hash }}
+
+      - name: Install build dependencies
+        if: steps.cache-libmpv.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            nasm \
+            yasm \
+            git \
+            python3 \
+            python3-pip \
+            meson \
+            ninja-build \
+            mingw-w64 \
+            mingw-w64-tools
+
+      - name: Build libmpv static libraries
+        if: steps.cache-libmpv.outputs.cache-hit != 'true'
+        run: |
+          cd libmpv-static-build
+          ./scripts/all.sh download
+          ./scripts/all.sh build
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Install LLVM/Clang cross-compilation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld llvm pkg-config mingw-w64
+
+      - name: Set up PKG_CONFIG_PATH
+        run: |
+          echo "PKG_CONFIG_PATH=${{ github.workspace }}/libmpv-static-build/output/lib/pkgconfig" >> $GITHUB_ENV
+
+      - name: Generate RUSTFLAGS from pkg-config
+        id: rustflags
+        run: |
+          cd radiance
+
+          # Get static library flags from pkg-config
+          export PKG_CONFIG_PATH="${{ github.workspace }}/libmpv-static-build/output/lib/pkgconfig"
+          export PKG_CONFIG_ALLOW_CROSS=1
+
+          # Get all the static library dependencies
+          LIBS=$(pkg-config --static --libs mpv 2>/dev/null || echo "")
+
+          # Convert pkg-config output to RUSTFLAGS format for LLVM/Clang
+          RUSTFLAGS="-C linker=clang"
+          RUSTFLAGS="$RUSTFLAGS -C link-arg=--target=x86_64-w64-mingw32"
+          RUSTFLAGS="$RUSTFLAGS -C link-arg=-fuse-ld=lld"
+          RUSTFLAGS="$RUSTFLAGS -C target-feature=+crt-static"
+          RUSTFLAGS="$RUSTFLAGS -L ${{ github.workspace }}/libmpv-static-build/output/lib"
+
+          # Add all library flags
+          for flag in $LIBS; do
+            if [[ $flag == -l* ]]; then
+              lib="${flag#-l}"
+              RUSTFLAGS="$RUSTFLAGS -C link-arg=-l$lib"
+            elif [[ $flag == -L* ]]; then
+              RUSTFLAGS="$RUSTFLAGS -C link-arg=$flag"
+            fi
+          done
+
+          echo "rustflags=$RUSTFLAGS" >> $GITHUB_OUTPUT
+          echo "Generated RUSTFLAGS: $RUSTFLAGS"
+
+      - name: Build radiance for Windows
+        run: |
+          cd radiance
+          export PKG_CONFIG_PATH="${{ github.workspace }}/libmpv-static-build/output/lib/pkgconfig"
+          export PKG_CONFIG_ALLOW_CROSS=1
+          export RUSTFLAGS="${{ steps.rustflags.outputs.rustflags }}"
+
+          cargo build --release --target x86_64-pc-windows-gnu
+
+      - name: Strip executable with LLVM
+        run: |
+          llvm-strip radiance/target/x86_64-pc-windows-gnu/release/radiance.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: radiance-windows-x86_64
+          path: radiance/target/x86_64-pc-windows-gnu/release/radiance.exe
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: radiance/target/x86_64-pc-windows-gnu/release/radiance.exe
+          token: ${{ secrets.GITHUB_TOKEN }}
