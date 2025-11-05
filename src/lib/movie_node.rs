@@ -15,6 +15,8 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 
+surfman::declare_surfman!();
+
 const SHADER_SOURCE: &str = include_str!("image_shader.wgsl");
 
 fn get_proc_address(
