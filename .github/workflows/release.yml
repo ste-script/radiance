@@ -45,6 +45,8 @@ jobs:
             pkg-config \
             mingw-w64 \
             mingw-w64-tools
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
 
       - name: Install libmpv build dependencies
         if: steps.cache-libmpv.outputs.cache-hit != 'true'
@@ -54,7 +56,6 @@ jobs:
             autoconf \
             automake \
             libtool \
-            nasm \
             yasm \
             git \
             python3 \
