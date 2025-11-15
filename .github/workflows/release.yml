@@ -95,7 +95,6 @@ jobs:
 
           # Get static library flags from pkg-config
           export PKG_CONFIG_PATH="${{ github.workspace }}/libmpv-static-build/output/lib/pkgconfig"
-          export PKG_CONFIG_ALLOW_CROSS=1
 
           # Get all the static library dependencies
           LIBS=$(pkg-config --static --libs mpv 2>/dev/null || echo "")
@@ -104,15 +103,11 @@ jobs:
           RUSTFLAGS="-C linker=clang"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=--target=x86_64-w64-mingw32"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-fuse-ld=lld"
-          RUSTFLAGS="$RUSTFLAGS -C target-feature=+crt-static"
           RUSTFLAGS="$RUSTFLAGS -L ${{ github.workspace }}/libmpv-static-build/output/lib"
 
           # Add all library flags
           for flag in $LIBS; do
-            if [[ $flag == -l* ]]; then
-              lib="${flag#-l}"
-              RUSTFLAGS="$RUSTFLAGS -C link-arg=-l$lib"
-            elif [[ $flag == -L* ]]; then
+            if [[ $flag == -l* ]] || [[ $flag == -L* ]]; then
               RUSTFLAGS="$RUSTFLAGS -C link-arg=$flag"
             fi
           done
@@ -124,7 +119,6 @@ jobs:
         run: |
           cd radiance
           export PKG_CONFIG_PATH="${{ github.workspace }}/libmpv-static-build/output/lib/pkgconfig"
-          export PKG_CONFIG_ALLOW_CROSS=1
           export RUSTFLAGS="${{ steps.rustflags.outputs.rustflags }}"
 
           cargo build --release --target x86_64-pc-windows-gnu
