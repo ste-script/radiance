@@ -116,21 +116,19 @@ jobs:
           EOF
           clang --target=x86_64-w64-mingw32 -c /tmp/dso_handle.c -o /tmp/dso_handle.o
 
-          # Force static linking of libgcc, libgcc_eh, libstdc++, and libwinpthread
+          # Force static linking of libgcc, libgcc_eh, libstdc++, libwinpthread, and libmingwex
           # Use --start-group to resolve circular dependencies between these static libraries
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,-Bstatic,--start-group"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-lgcc"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-lgcc_eh"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-lstdc++"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-lwinpthread"
+          RUSTFLAGS="$RUSTFLAGS -C link-arg=-lmingwex"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,--end-group,-Bdynamic"
           # Add dso_handle.o to provide __dso_handle symbol for static C++ linking
           RUSTFLAGS="$RUSTFLAGS -C link-arg=/tmp/dso_handle.o"
-          # Link C runtime and Windows API libraries after static libs (dynamic linking)
-          RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,--start-group"
+          # Link C runtime (UCRT) and Windows API libraries after static libs (dynamic linking)
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-lucrt"
-          RUSTFLAGS="$RUSTFLAGS -C link-arg=-lmingwex"
-          RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,--end-group"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-lkernel32"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-ladvapi32"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-lshell32"
