@@ -110,21 +110,19 @@ jobs:
             fi
           done
 
-          # Generate dso_handle.o to provide __dso_handle symbol for static C++ linking
-          cat > /tmp/dso_handle.c << 'EOF'
-          void *__dso_handle = &__dso_handle;
-          EOF
-          clang --target=x86_64-w64-mingw32 -c /tmp/dso_handle.c -o /tmp/dso_handle.o
-
-          # Force static linking of libgcc, libgcc_eh, libstdc++, and libwinpthread
+          # Force static linking of libgcc, libgcc_eh, libstdc++, libwinpthread, and libmingw32
+          # Allow multiple definitions since C++ static libraries embed libstdc++ code
+          # Use --start-group/--end-group to resolve circular dependencies between these libs
+          RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,--allow-multiple-definition"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,-Bstatic"
-          RUSTFLAGS="$RUSTFLAGS -C link-arg=-lstdc++"
+          RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,--start-group"
+          RUSTFLAGS="$RUSTFLAGS -C link-arg=-lmingw32"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-lwinpthread"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-lgcc_eh"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-lgcc"
+          RUSTFLAGS="$RUSTFLAGS -C link-arg=-lstdc++"
+          RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,--end-group"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,-Bdynamic"
-          # Add dso_handle.o to provide __dso_handle symbol for static C++ linking
-          RUSTFLAGS="$RUSTFLAGS -C link-arg=/tmp/dso_handle.o"
           # MinGW runtime libraries (mingwex static, msvcrt uses system default CRT)
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,--start-group"
           RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,-Bstatic"
