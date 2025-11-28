@@ -10,10 +10,10 @@ fn dist(pt: vec2<f32>, xbound: vec2<f32>, y: f32) -> f32 {
     let d = abs(pt.y - y);
 
     // L1 distance from endpoints (to give sharp, diamond corners)
-    let d = d + step(pt.x, xbound.x) * (xbound.x - pt.x);
-    let d = d + step(xbound.y, pt.x) * (pt.x - xbound.y);
+    let d2 = d + step(pt.x, xbound.x) * (xbound.x - pt.x);
+    let d3 = d2 + step(xbound.y, pt.x) * (pt.x - xbound.y);
 
-    return d;
+    return d3;
 }
 
 fn bound(low: f32, high: f32, eps: f32, t: f32) -> f32 {
@@ -56,11 +56,11 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
                     + four  * bound(1.0, 2.0, 0.10, tOff);
 
     let alpha = 1.0 - smoothstep(0.02, 0.04, totalDist);
-    let alpha = clamp(0., 1., alpha);
+    let alpha2 = clamp(0., 1., alpha);
 
     let color = vec4(1.0, 0.2, 0.0, 1.0); // Red
-    let color = color * alpha;
-    let color = color * iIntensity;
+    let color2 = color * alpha2;
+    let color3 = color2 * iIntensity;
 
-    return composite(textureSample(iInputsTex[0], iSampler, uv), color);
+    return composite(textureSample(iInputsTex[0], iSampler, uv), color3);
 }

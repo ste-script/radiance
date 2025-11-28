@@ -1,18 +1,18 @@
 #property description Introduce a delay (and reduce resolution)
 
-let SZ = 6.;    // Delay of SZ*SZ frames (36)
+const SZ: f32 = 6.;    // Delay of SZ*SZ frames (36)
 fn main(uv: vec2<f32>) -> vec4<f32> {
     let original = textureSample(iInputsTex[0], iSampler, uv);
     let shift = floor(iResolution / SZ) / iResolution;
     let uvNew = uv * shift;
-    let uvNew = mix(uvNew, uv, smoothstep(0.8, 0.9, iIntensity));
-    let delayed = textureSample(iChannelsTex[1], iSampler, uvNew);
+    let uvNew2 = mix(uvNew, uv, smoothstep(0.8, 0.9, iIntensity));
+    let delayed = textureSample(iChannelsTex[1], iSampler, uvNew2);
     return mix(original, delayed, smoothstep(0., 0.2, iIntensity));
 }
 
 #buffershader
 
-let SZ = 6.;    // Delay of SZ*SZ frames (36)
+const SZ: f32 = 6.;    // Delay of SZ*SZ frames (36)
 fn main(uv: vec2<f32>) -> vec4<f32> {
     let shift = floor(iResolution / SZ) / iResolution;
     let maxShift = shift * SZ;

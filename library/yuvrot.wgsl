@@ -6,13 +6,13 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
 
     let t = select(iIntensity * 2. * pi, iTime * iFrequency * pi, iFrequency != 0.);
     let u_v = yuv.gb * 2.;
-    let u_v = u_v - 1.;
-    let u_v = vec2<f32>(u_v.x * cos(t) - yuv.b * sin(t),
-                        u_v.y * sin(t) + yuv.b * cos(t));
-    let u_v = u_v + 1.;
-    let u_v = u_v / 2.;
+    let u_v2 = u_v - 1.;
+    let u_v3 = vec2<f32>(u_v2.x * cos(t) - yuv.b * sin(t),
+                        u_v2.y * sin(t) + yuv.b * cos(t));
+    let u_v4 = u_v3 + 1.;
+    let u_v5 = u_v4 / 2.;
 
-    let yuv = vec3<f32>(yuv.r, u_v);
+    let yuv2 = vec3<f32>(yuv.r, u_v5);
 
-    return select(vec4<f32>(yuv2rgb(yuv), 1.) * fragColor.a, mix(fragColor, vec4<f32>(yuv2rgb(yuv), 1.) * fragColor.a, iIntensity), iFrequency != 0.);
+    return select(vec4<f32>(yuv2rgb(yuv2), 1.) * fragColor.a, mix(fragColor, vec4<f32>(yuv2rgb(yuv2), 1.) * fragColor.a, iIntensity), iFrequency != 0.);
 }

@@ -12,9 +12,9 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
 
     let c = vec4(0., 1., 1., 1.) * y;
     let d = vec4(0., 0., 1., 1.) * g * smoothstep(0.5, 0.8, iIntensity);
-    let c = composite(c, d);
+    let c2 = composite(c, d);
 
-    let c = c * smoothstep(0., 0.1, iIntensity);
-    let c = clamp(c, vec4<f32>(0.), vec4<f32>(1.));
-    return composite(o, c);
+    let c3 = c2 * smoothstep(0., 0.1, iIntensity);
+    let c4 = clamp(c3, vec4<f32>(0.), vec4<f32>(1.));
+    return composite(o, c4);
 }

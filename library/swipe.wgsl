@@ -13,8 +13,8 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let w = 1. - iIntensity;
     let x = select(0., pow(0.5 - t, 3.0), t < 0.5);
 
-    let factor = min(factor, 1.0 - x);
-    let factor = clamp(factor, 0.0, 1.0);
+    let factor2 = min(factor, 1.0 - x);
+    let factor3 = clamp(factor2, 0.0, 1.0);
 
-    return mix(next, prev, factor);
+    return mix(next, prev, factor3);
 }

@@ -6,8 +6,8 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
 
     // bin in non-premultiplied space, then re-premultiply
     let c = demultiply(textureSample(iInputsTex[0], iSampler,  uv));
-    let c = round(c * bins) / bins;
-    let c = clamp(c, vec4<f32>(0.0), vec4<f32>(1.0));
-    let fragColor = premultiply(c);
+    let c2 = round(c * bins) / bins;
+    let c3 = clamp(c2, vec4<f32>(0.0), vec4<f32>(1.0));
+    let fragColor = premultiply(c3);
     return mix(textureSample(iInputsTex[0], iSampler,  uv), fragColor, pow(defaultPulse, 2.));
 }

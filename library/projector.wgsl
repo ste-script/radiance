@@ -1,6 +1,6 @@
 #property description Projector light scattering
 
-let DEPTH = 200;
+const DEPTH: i32 = 200;
 
 fn lookup(coord: vec2<f32>) -> vec4<f32> {
     let texUV = coord / aspectCorrection + 0.5;
@@ -17,9 +17,9 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
         w *= 0.98;
         let s = (normCoord - source) / (f32(i) / f32(DEPTH)) + source;
         let res = lookup(s);
-        let res = res * (max(res.r, max(res.g, res.b)));
-        let res = res * (w);
-        col = composite(col, res);
+        let res2 = res * (max(res.r, max(res.g, res.b)));
+        let res3 = res2 * (w);
+        col = composite(col, res3);
     }
 
     return col;

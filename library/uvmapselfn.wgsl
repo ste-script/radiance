@@ -1,6 +1,6 @@
 #property description Apply `uvmapself` repeatedly. Instant hellscape
 
-let N = 5;
+const N: i32 = 5;
 
 fn main(uv: vec2<f32>) -> vec4<f32> {
     // It looks better at low values of intensity

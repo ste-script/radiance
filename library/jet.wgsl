@@ -37,9 +37,9 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
 
     let h = (1.90 - hsv.x) % 1.0;
     let c = colormap(h);                   // Hue
-    let c = mix(vec3<f32>(1.0), c.rgb, hsv.y);   // Sat
-    let c = c * hsv.z;                         // Val
-    let c = vec4<f32>(c, 1.) * origColor.a;
+    let c2 = mix(vec3<f32>(1.0), c.rgb, hsv.y);   // Sat
+    let c3 = c2 * hsv.z;                         // Val
+    let c4 = vec4<f32>(c3, 1.) * origColor.a;
 
-    return mix(origColor, c, iIntensity * pow(defaultPulse, 2.));
+    return mix(origColor, c4, iIntensity * pow(defaultPulse, 2.));
 }

@@ -7,10 +7,10 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let fragColor = m;
 
     // x is 1.0 in pure green areas and ~0.0 elsewhere
-    let m = demultiply(m); // don't use alpha to detect green-ness
-    let x = pow(clamp(m.g - (m.r + m.b) * 3.0, 0.0, 1.0), 0.2);
-    let x = x * m.a; // Put alpha back in
+    let m2 = demultiply(m); // don't use alpha to detect green-ness
+    let x = pow(clamp(m2.g - (m2.r + m2.b) * 3.0, 0.0, 1.0), 0.2);
+    let x2 = x * m2.a; // Put alpha back in
 
     let parameter = iIntensity * pow(defaultPulse, 2.);
-    return composite(fragColor, g * x * parameter);
+    return composite(fragColor, g * x2 * parameter);
 }

@@ -5,11 +5,11 @@
 #property frequency 1
 #property inputCount 2
 
-let MAX_MARCHING_STEPS: i32 = 255;
-let STEP_SIZE: f32 = 0.7;
-let MIN_DIST: f32 = 0.0;
-let MAX_DIST: f32 = 100.0;
-let EPSILON: f32 = 0.001;
+const MAX_MARCHING_STEPS: i32 = 255;
+const STEP_SIZE: f32 = 0.7;
+const MIN_DIST: f32 = 0.0;
+const MAX_DIST: f32 = 100.0;
+const EPSILON: f32 = 0.001;
 
 /**
  * Signed distance function describing the scene.
@@ -21,12 +21,12 @@ let EPSILON: f32 = 0.001;
 
 // Displacement based on a single parameter
 fn disp(x: f32) -> f32 {
-    let x = x * 0.3;
-    let wave = 1.8 * sin(x * 10. + iTime * iFrequency * 0.1) * iAudioLow;
-    let wave = wave + 1.2 * sin(x * 20. + iTime * iFrequency * 0.1) * iAudioMid;
-    let wave = wave + 0.6 * sin(x * 70. + iTime * iFrequency * 0.1) * iAudioHi;
-    let wave = wave * iIntensity;
-    return wave;
+    let x2 = x * 0.3;
+    let wave = 1.8 * sin(x2 * 10. + iTime * iFrequency * 0.1) * iAudioLow;
+    let wave2 = wave + 1.2 * sin(x2 * 20. + iTime * iFrequency * 0.1) * iAudioMid;
+    let wave3 = wave2 + 0.6 * sin(x2 * 70. + iTime * iFrequency * 0.1) * iAudioHi;
+    let wave4 = wave3 * iIntensity;
+    return wave4;
 }
 
 // Displacement of the sphere at a point p
@@ -112,14 +112,14 @@ fn phongContribForLight(k_d: vec3<f32>, k_s: vec3<f32>, alpha: f32, p: vec3<f32>
     let up = vec3(0., 1., 0.);
     let u = normalize(cross(N, up));
     let v = cross(N, u);
-    let N = N + u * perturb.x + v * perturb.y;
-    let N = normalize(N);
+    let N2 = N + u * perturb.x + v * perturb.y;
+    let N3 = normalize(N2);
 
     let L = normalize(lightPos - p);
     let V = normalize(eye - p);
-    let R = normalize(reflect(-L, N));
+    let R = normalize(reflect(-L, N3));
     
-    let dotLN = dot(L, N);
+    let dotLN = dot(L, N3);
     let dotRV = dot(R, V);
     
     if (dotLN < 0.0) {
@@ -151,27 +151,27 @@ fn phongContribForLight(k_d: vec3<f32>, k_s: vec3<f32>, alpha: f32, p: vec3<f32>
 fn phongIllumination(k_a: vec3<f32>, k_d: vec3<f32>, k_s: vec3<f32>, alpha: f32, p: vec3<f32>, eye: vec3<f32>, perturb: vec2<f32>) -> vec3<f32> {
     let ambientLight = 0.5 * vec3<f32>(1.0, 1.0, 1.0);
     let color = ambientLight * k_a;
-    
+
     let light1Pos = vec3<f32>(20.0,
                           20.0,
                           20.0);
     //light1Pos += eye;
     let light1Intensity = vec3<f32>(0.4, 0.4, 0.4);
-    
-    let color = color + phongContribForLight(k_d, k_s, alpha, p, eye,
+
+    let color2 = color + phongContribForLight(k_d, k_s, alpha, p, eye,
                                   light1Pos,
                                   light1Intensity, perturb);
-    
+
     let light2Pos = vec3<f32>(-20.0,
                           -20.0,
                           -20.0);
 
     let light2Intensity = vec3<f32>(0.4, 0.4, 0.4);
-    
-    let color = color + phongContribForLight(k_d, k_s, alpha, p, eye,
+
+    let color3 = color2 + phongContribForLight(k_d, k_s, alpha, p, eye,
                                   light2Pos,
-                                  light2Intensity, perturb);    
-    return color;
+                                  light2Intensity, perturb);
+    return color3;
 }
 
 /**
@@ -214,11 +214,11 @@ fn main(uv: vec2<f32>) -> vec4<f32>
     let p = eye + dist * worldDir;
 
     let texCoord = p.zy;
-    let texCoord = texCoord + dispP(p) * normalize(texCoord);
-    let texCoord = texCoord / max(iIntensity * 1.01, 0.001);
-    let texCoord = 0.5 * texCoord + 0.5;
+    let texCoord2 = texCoord + dispP(p) * normalize(texCoord);
+    let texCoord3 = texCoord2 / max(iIntensity * 1.01, 0.001);
+    let texCoord4 = 0.5 * texCoord3 + 0.5;
 
-    let texColor = textureSampleLevel(iInputsTex[0], iSampler, texCoord, 0.).rgb * box(texCoord);
+    let texColor = textureSampleLevel(iInputsTex[0], iSampler, texCoord4, 0.).rgb * box(texCoord4);
     let K_a = texColor * 0.3;
     let K_d = texColor * 1.3;
     let K_s = vec3<f32>(1.0, 1.0, 1.0);

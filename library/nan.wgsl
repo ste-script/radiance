@@ -1,9 +1,10 @@
 #property description Fill frame with NANs or INFs
 
 fn main(uv: vec2<f32>) -> vec4<f32> {
-    let nan = 0. / 0.;
-    let n_inf = -1. / 0.;
-    let p_inf = 1. / 0.;
+    let zero = 0.0;
+    let nan = zero / zero;
+    let n_inf = -1. / zero;
+    let p_inf = 1. / zero;
 
     if iIntensity < 0.25 {
         return textureSampleLevel(iInputsTex[0], iSampler, uv, 0.);

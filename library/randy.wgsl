@@ -14,10 +14,10 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let rot = mat2x2<f32>(c, -s, s, c);
 
     let newUV = normCoord * rot;
-    let newUV = newUV / aspectCorrection + 0.5;
+    let newUV2 = newUV / aspectCorrection + 0.5;
 
-    let nc = textureSample(iInputsTex[0], iSampler,  newUV);
-    let nc = nc * (box(newUV));
+    let nc = textureSample(iInputsTex[0], iSampler,  newUV2);
+    let nc2 = nc * (box(newUV2));
 
-    return nc;
+    return nc2;
 }

@@ -19,6 +19,6 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
                + map.br * bound(2.0, 3.0, 0.20, t)
                + map.gr * bound(1.0, 2.0, 0.20, tOff);
 
-    let newUV = mix(uv, newUV, iIntensity * map.a);
-    return textureSample(iInputsTex[0], iSampler,  newUV);
+    let newUV2 = mix(uv, newUV, iIntensity * map.a);
+    return textureSample(iInputsTex[0], iSampler,  newUV2);
 }

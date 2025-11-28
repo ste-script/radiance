@@ -1,7 +1,7 @@
 #property description Rainbow radial blur
 #property frequency 1
 
-let DEPTH = 16;
+const DEPTH: i32 = 16;
 
 fn lookup(coord: vec2<f32>) -> vec4<f32> {
     return textureSample(iInputsTex[0], iSampler,  coord / aspectCorrection + 0.5);
@@ -20,19 +20,19 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
         s += d;
         let res = lookup(s);
         //let res = smoothstep(0., 1., res); // Makes colors more vibrant
-        let res = res * max(res.r, max(res.g, res.b));
-        let res = res * w;
-        let hsv = rgb2hsv(res.rgb); // TODO this would probably be made much faster using a buffershader of the input converted to HSV
+        let res2 = res * max(res.r, max(res.g, res.b));
+        let res3 = res2 * w;
+        let hsv = rgb2hsv(res3.rgb); // TODO this would probably be made much faster using a buffershader of the input converted to HSV
         let h = fract(hsv.x + f32(i) * deltaHue - 0.5 * iTime * iFrequency);
         let rgb = hsv2rgb(vec3<f32>(h, hsv.yz));
-        col = composite(col, add_alpha(rgb, res.a));
+        col = composite(col, add_alpha(rgb, res3.a));
     }
 
     // This composition results in some saturation loss,
     // so resaturate
     let hsv = rgb2hsv(col.rgb);
-    let s = pow(hsv.y, (1.5 - pow(iIntensity, 0.5)) / 1.5);
-    let rgb = hsv2rgb(vec3<f32>(hsv.x, s, hsv.z));
+    let s_final = pow(hsv.y, (1.5 - pow(iIntensity, 0.5)) / 1.5);
+    let rgb = hsv2rgb(vec3<f32>(hsv.x, s_final, hsv.z));
 
     return add_alpha(rgb, col.a);
 }

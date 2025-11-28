@@ -10,7 +10,7 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let b = 0.5 * sin((normCoord.x - normCoord.y) * ratio) + 0.5;
     let a = 1.0;
 
-    let c = vec4<f32>(r, g, b, a);
+    let c2 = vec4<f32>(r, g, b, a);
 
-    return composite(textureSample(iInputsTex[0], iSampler,  uv), c * iIntensity);
+    return composite(textureSample(iInputsTex[0], iSampler,  uv), c2 * iIntensity);
 }

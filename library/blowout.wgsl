@@ -9,7 +9,7 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
 
     // Even when halfWidth = 0.5, smoothstep is not the identity
     // so we mix here to preserve keep the identity
-    let color = mix(color, targetColor, iIntensity * pow(defaultPulse, 2.));
+    let color2 = mix(color, targetColor, iIntensity * pow(defaultPulse, 2.));
 
-    return premultiply(vec4<f32>(color, color4.a));
+    return premultiply(vec4<f32>(color2, color4.a));
 }

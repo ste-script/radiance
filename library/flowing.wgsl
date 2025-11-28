@@ -15,10 +15,10 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let amount = iIntensity;
 
     // Avoid the edges to smooth the discontinuity
-    let amount = amount * smoothstep(0., 0.4, newLightness);
-    let amount = amount * (1. - smoothstep(0.6, 1., newLightness));
+    let amount2 = amount * smoothstep(0., 0.4, newLightness);
+    let amount3 = amount2 * (1. - smoothstep(0.6, 1., newLightness));
 
-    let v = mix(v, newLightness, amount);
-    let rgb = hsv2rgb(vec3<f32>(h, s, v));
+    let v2 = mix(v, newLightness, amount3);
+    let rgb = hsv2rgb(vec3<f32>(h, s, v2));
     return vec4<f32>(rgb, max(max(max(fragColor.a, rgb.r), rgb.g), rgb.b));
 }

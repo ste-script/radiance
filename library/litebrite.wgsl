@@ -2,18 +2,18 @@
 
 fn triGrid(basis: mat2x2<f32>, uv: vec2<f32>) -> vec4<f32> {
     let points = min(3. / iIntensity, 10000.);
-    let points = points / (0.3 + 0.7 * pow(defaultPulse, 2.));
-    let r = 0.5 / points;
+    let points2 = points / (0.3 + 0.7 * pow(defaultPulse, 2.));
+    let r = 0.5 / points2;
 
     let invBasis = inverse2(basis);
 
     let pt = (uv - 0.5) * aspectCorrection;
 
-    let newCoord = round(pt * points * invBasis);
-    let colorCoord = newCoord / points * basis;
+    let newCoord = round(pt * points2 * invBasis);
+    let colorCoord = newCoord / points2 * basis;
     let c = textureSample(iInputsTex[0], iSampler,  colorCoord / aspectCorrection + 0.5);
-    let c = c * (1. - step(r, length(pt - colorCoord)));
-    return c;
+    let c2 = c * (1. - step(r, length(pt - colorCoord)));
+    return c2;
 }
 
 fn main(uv: vec2<f32>) -> vec4<f32> {

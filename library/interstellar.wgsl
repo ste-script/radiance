@@ -2,10 +2,10 @@
 //#property author https://www.shadertoy.com/view/Xdl3D2
 #property frequency 1
 
-let tau = 6.28318530717958647692;
+const tau: f32 = 6.28318530717958647692;
 
 // Gamma correction
-let GAMMA = 2.2;
+const GAMMA: f32 = 2.2;
 
 fn ToLinear(col: vec3<f32>) -> vec3<f32> {
 	// simulate a monitor, converting colour values into light values
@@ -42,8 +42,8 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
 	for ( var i=0; i < 20; i++ )
 	{
 		let z = Noise(vec2<i32>(pos.xy)).x;
-		let z = fract(z - offset);
-		let d = 50.0 * z - pos.z;
+		let z2 = fract(z - offset);
+		let d = 50.0 * z2 - pos.z;
 		let w = pow(max(0.0, 1.0 - 8.0 * length(fract(pos.xy) - .5)), 2.0);
 		let c = max(
             vec3<f32>(0.),
@@ -52,7 +52,7 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
                       1.0 - abs(d - speed2 * .5) / speed
             )
         );
-		col += 1.5 * (1.0 - z) * w * c;
+		col += 1.5 * (1.0 - z2) * w * c;
 		pos += stp;
 	}
 

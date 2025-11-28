@@ -1,8 +1,8 @@
 #property description Rotate the 'object' in 3D, like a coin
 #property frequency 1
 
-let WIDTH = 0.1;
-let ITERS = 64;
+const WIDTH: f32 = 0.1;
+const ITERS: i32 = 64;
 
 fn lookup(coord: vec2<f32>) -> vec4<f32> {
     let xy = coord / aspectCorrection + 0.5;
@@ -20,7 +20,7 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     } else {
         phi = iIntensity * pi;
     }
-    var s = vec2<f32>(s.x / cos(phi), s.y);
+    s = vec2<f32>(s.x / cos(phi), s.y);
 
     // This isn't quite right, but it's super easy compared to real geometry
     d *= abs(cos(phi)) * sign(sin(phi * 2.));

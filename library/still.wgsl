@@ -6,8 +6,8 @@
 fn main(uv: vec2<f32>) -> vec4<f32> {
     let hold = textureSample(iChannelsTex[1], iSampler,  uv);
     let inp = textureSample(iInputsTex[0], iSampler,  uv);
-    let hold = vec4<f32>(hold.rgb, 1.) * inp.a;
-    return mix(inp, hold, iIntensity);
+    let hold2 = vec4<f32>(hold.rgb, 1.) * inp.a;
+    return mix(inp, hold2, iIntensity);
 }
 
 #buffershader
@@ -19,12 +19,12 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let k = hold.a;
     let d = distance(inp.rgb, hold.rgb) / sqrt(3.);
 
-    let k = k + pow(d, 0.5) * 0.3 - 0.03;
-    let k = k * pow(iIntensity, 0.3);
-    let k = k + pow(defaultPulse, 0.5); // I don't really get whats going on here
-    let k = clamp(k, 0., 1.);
+    let k2 = k + pow(d, 0.5) * 0.3 - 0.03;
+    let k3 = k2 * pow(iIntensity, 0.3);
+    let k4 = k3 + pow(defaultPulse, 0.5); // I don't really get whats going on here
+    let k5 = clamp(k4, 0., 1.);
 
-    let rgb = mix(inp.rgb, hold.rgb, k);
-    let a = k;
+    let rgb = mix(inp.rgb, hold.rgb, k5);
+    let a = k5;
     return vec4<f32>(rgb, a);
 }

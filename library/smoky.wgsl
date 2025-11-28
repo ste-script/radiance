@@ -3,9 +3,9 @@
 fn main(uv: vec2<f32>) -> vec4<f32> {
     let fragColor = textureSample(iInputsTex[0], iSampler,  uv);
     let c = textureSample(iChannelsTex[1], iSampler,  uv); // The smoke is stored and drawn on iChannelsTex[1]
-    let c = c * (smoothstep(0., 0.2, iIntensity));
-    let fragColor = composite(c, fragColor);
-    return fragColor;
+    let c2 = c * (smoothstep(0., 0.2, iIntensity));
+    let fragColor2 = composite(c2, fragColor);
+    return fragColor2;
 }
 
 #buffershader
@@ -23,8 +23,8 @@ fn circulate(uv: vec2<f32>, xf: mat3x3<f32>) -> vec2<f32> {
     let val = 0.01 * pt * mat2x2<f32>(0., 1., -1., 0.) / (l * l);
 
     // Prevent weirdness in the center
-    let val = val * (smoothstep(0., 0.1, l));
-    return val;
+    let val2 = val * (smoothstep(0., 0.1, l));
+    return val2;
 }
 
 // Create a compelling circulating vector field
@@ -49,8 +49,8 @@ fn vectorField(uv: vec2<f32>) -> vec2<f32> {
     }
 
     // Give a slight bit of divergence
-    let field = field - ((uv - 0.5) * iIntensity * iIntensity * 0.3);
-    return field;
+    let field2 = field - ((uv - 0.5) * iIntensity * iIntensity * 0.3);
+    return field2;
 }
 
 fn main(uv: vec2<f32>) -> vec4<f32> {
@@ -63,17 +63,17 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let fragColor = textureSample(iChannelsTex[1], iSampler,  uv + vectorField(uv) * dt);
 
     // Fade out
-    let fragColor = fragColor * exp((iIntensity - 2.) * fadeout / 3.);
+    let fragColor2 = fragColor * exp((iIntensity - 2.) * fadeout / 3.);
 
     // Clear when intensity is zero
-    let fragColor = fragColor * smoothstep(0., 0.1, iIntensity);
+    let fragColor3 = fragColor2 * smoothstep(0., 0.1, iIntensity);
 
     // Desaturate
-    let avgRGB = (fragColor.r + fragColor.g + fragColor.b) / 3.;
-    let rgb = mix(fragColor.rgb, vec3<f32>(avgRGB), 0.05);
-    let fragColor = vec4<f32>(rgb, fragColor.a);
+    let avgRGB = (fragColor3.r + fragColor3.g + fragColor3.b) / 3.;
+    let rgb = mix(fragColor3.rgb, vec3<f32>(avgRGB), 0.05);
+    let fragColor4 = vec4<f32>(rgb, fragColor3.a);
 
     // Composite with input
     let c = textureSample(iInputsTex[0], iSampler,  uv);
-    return composite(fragColor, c);
+    return composite(fragColor4, c);
 }

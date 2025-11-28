@@ -7,8 +7,8 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let rgba = demultiply(textureSample(iInputsTex[0], iSampler,  uv));
     let hsv = rgb2hsv(rgba.rgb);
     let h = (round(hsv.r * bins) / bins) % 1.0;
-    let hsv = vec3<f32>(h, hsv.yz);
-    let rgb = hsv2rgb(hsv);
+    let hsv2 = vec3<f32>(h, hsv.yz);
+    let rgb = hsv2rgb(hsv2);
 
     return premultiply(vec4<f32>(rgb, rgba.a));
 }

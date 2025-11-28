@@ -21,9 +21,9 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let v = (textureSample(iChannelsTex[1], iSampler,  vec2<f32>(0.5, 0.5)).r + 1. - parameter) % 1.;
 
     // If intensity is low, decay to zero
-    let v = max(0., v - 0.02 * (1. - step(0.03, iIntensity)));
+    let v2 = max(0., v - 0.02 * (1. - step(0.03, iIntensity)));
 
-    return vec4<f32>(v);
+    return vec4<f32>(v2);
 }
 
 #buffershader

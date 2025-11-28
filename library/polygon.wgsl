@@ -5,11 +5,11 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let n_sides = clamp(2.4 / (1. - iIntensity), 3., 10000.);
     let whole_sides = floor(n_sides);
     let fract_sides = fract(n_sides);
-    let n_sides = whole_sides + smoothstep(0.2, 0.8, fract_sides);
+    let n_sides2 = whole_sides + smoothstep(0.2, 0.8, fract_sides);
 
     let normCoord = 2. * (uv - 0.5) * aspectCorrection;
     let angle = atan2(normCoord.y, normCoord.x);
-    let arc = 2. * pi / n_sides;
+    let arc = 2. * pi / n_sides2;
     let a1 = (abs(angle) + iFrequency * iTime * 0.25 * arc) % arc;
     //let lengthFactor = sqrt(2.);
     let lengthFactor = 1.0;

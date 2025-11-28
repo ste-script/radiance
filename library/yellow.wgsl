@@ -11,10 +11,10 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let g = smoothstep(0.5, 0.9, abs(fract(0.5 * (1. + normCoord.x * 4. - t)) * 2. - 1.));
 
     let c = vec4<f32>(1., 1., 0., y);
-    let c = composite(c, vec4<f32>(0., 1., 0., g * smoothstep(0.5, 0.8, iIntensity)));
+    let c2 = composite(c, vec4<f32>(0., 1., 0., g * smoothstep(0.5, 0.8, iIntensity)));
 
-    let a = c.a * (smoothstep(0., 0.1, iIntensity));
-    let c = vec4<f32>(c.rgb, a);
-    let c = clamp(c, vec4<f32>(0.), vec4<f32>(1.));
-    return composite(fragColor, premultiply(c));
+    let a = c2.a * (smoothstep(0., 0.1, iIntensity));
+    let c3 = vec4<f32>(c2.rgb, a);
+    let c4 = clamp(c3, vec4<f32>(0.), vec4<f32>(1.));
+    return composite(fragColor, premultiply(c4));
 }

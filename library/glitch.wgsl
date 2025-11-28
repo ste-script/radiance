@@ -29,23 +29,23 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let noise_glitch = step(1. - 0.2 * parameter, n1.x);
     let white_noise = textureSample(iNoiseTex, iSampler, vec2<f32>(rand3(vec3<f32>(uv, iTime + 100.)), rand3(vec3<f32>(uv, iTime))) % 1.);
     let white_noise_rgb = white_noise.rgb * (white_noise.a);
-    let c = mix(c, vec4<f32>(white_noise_rgb, white_noise.a), noise_glitch);
+    let c2 = mix(c, vec4<f32>(white_noise_rgb, white_noise.a), noise_glitch);
 
     // Invert colors
     let invert_glitch = step(1. - 0.2 * parameter, n1.y);
-    let c = mix(c, vec4<f32>(c.a - c.rgb, c.a), invert_glitch);
+    let c3 = mix(c2, vec4<f32>(c2.a - c2.rgb, c2.a), invert_glitch);
 
     // Solid color glitch
     let solid_glitch = step(1. - 0.2 * parameter, n1.z);
-    let c = mix(c, vec4<f32>(0., 1., 0., 1.), solid_glitch);
+    let c4 = mix(c3, vec4<f32>(0., 1., 0., 1.), solid_glitch);
 
     // Shift glitch
     let shift_glitch = step(1. - 0.2 * parameter, n1.w);
-    let c = mix(c, textureSample(iInputsTex[0], iSampler,  uv - vec2<f32>(0.2, 0.)), shift_glitch);
+    let c5 = mix(c4, textureSample(iInputsTex[0], iSampler,  uv - vec2<f32>(0.2, 0.)), shift_glitch);
 
     // Freeze glitch
     let freeze_glitch = step(1. - 0.2 * parameter, n2.x);
-    let c = mix(c, textureSample(iChannelsTex[0], iSampler,  uv), freeze_glitch);
+    let c6 = mix(c5, textureSample(iChannelsTex[0], iSampler,  uv), freeze_glitch);
 
-    return c;
+    return c6;
 }

@@ -22,9 +22,9 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let eyeShape = smoothstep(0.8 + a, 1.0 + a, length(abs(normCoord) + vec2<f32>(0., 0.7)));
 
     let newUV = mix(newUVCenter, newUVMiddle, centerShape);
-    let newUV = mix(newUV, newUVOutside, eyeShape);
+    let newUV2 = mix(newUV, newUVOutside, eyeShape);
 
-    let newUV = newUV / aspectCorrection + 0.5;
+    let newUV3 = newUV2 / aspectCorrection + 0.5;
 
-    return textureSample(iInputsTex[0], iSampler,  mix(uv, newUV, iIntensity));
+    return textureSample(iInputsTex[0], iSampler,  mix(uv, newUV3, iIntensity));
 }

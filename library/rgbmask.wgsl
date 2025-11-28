@@ -10,8 +10,8 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let f = m.a * iIntensity * defaultPulse;
     let fragColor = vec4<f32>(mix(m.rgb, vec3<f32>(0.0), f), m.a);
 
-    let fragColor = composite(fragColor, r * m.r * f);
-    let fragColor = composite(fragColor, g * m.g * f);
-    let fragColor = composite(fragColor, b * m.b * f);
-    return fragColor;
+    let fragColor2 = composite(fragColor, r * m.r * f);
+    let fragColor3 = composite(fragColor2, g * m.g * f);
+    let fragColor4 = composite(fragColor3, b * m.b * f);
+    return fragColor4;
 }

@@ -19,8 +19,8 @@ fn estimateNormal(uv: vec2<f32>) -> vec3<f32> {
 
     // Take a small step in Y
     let ptStepY = uv + vec2<f32>(0., onePixel.y);
-    let z = height(ptStepY);
-    let stepY = vec3<f32>(ptStepY, z) - pt;
+    let z2 = height(ptStepY);
+    let stepY = vec3<f32>(ptStepY, z2) - pt;
 
     // Return the cross product of these vectors
     // to get the surface normal

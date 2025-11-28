@@ -11,6 +11,6 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let rgb = hsv2rgb(vec3<f32>(h, hsv.yz));
     let c = add_alpha(rgb, fragColor.a);
 
-    let fragColor = mix(fragColor, c, iIntensity);
-    return select(c, mix(fragColor, c, iIntensity), iFrequency != 0.);
+    let fragColor2 = mix(fragColor, c, iIntensity);
+    return select(c, mix(fragColor2, c, iIntensity), iFrequency != 0.);
 }

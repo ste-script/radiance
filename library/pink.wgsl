@@ -14,7 +14,7 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let parameter = iIntensity * (0.7 + 0.3 * pow(defaultPulse, 2.));
 
     let c = vec4<f32>(1., 0.5, 0.5, 1.0);
-    let c = c * (1. - smoothstep(r - smooth_amt, r, length((count + normCoord * 5. * parameter + 0.5) % vec2<f32>(1.) - 0.5)));
-    let c = c * smoothstep(0., 0.1, iIntensity);
-    return composite(fragColor, c);
+    let c2 = c * (1. - smoothstep(r - smooth_amt, r, length((count + normCoord * 5. * parameter + 0.5) % vec2<f32>(1.) - 0.5)));
+    let c3 = c2 * smoothstep(0., 0.1, iIntensity);
+    return composite(fragColor, c3);
 }

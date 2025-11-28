@@ -6,9 +6,9 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
 
     let over = textureSample(iChannelsTex[1], iSampler,  uv);
     let a = step(1. - iIntensity + 0.005, over.a);
-    let over = over * a;
+    let over2 = over * a;
 
-    return composite(under, over);
+    return composite(under, over2);
 }
 
 #buffershader
@@ -16,7 +16,7 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
 fn main(uv: vec2<f32>) -> vec4<f32> {
     let before = textureSample(iChannelsTex[1], iSampler,  uv);
     let a = max(before.a - 0.005, 0.);
-    let before = before * a;
+    let before2 = before * a;
 
     let transVec = textureSample(iChannelsTex[2], iSampler,  vec2<f32>(0.));
     let trans = step(0.5, transVec.r - transVec.g) + step(0., -iFrequency);
@@ -33,7 +33,7 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let color = clamp(vec4<f32>(hsv2rgb(hsv), 1.0), vec4<f32>(0.0), vec4<f32>(1.0));
 
     let inside = box((uv - xy) / wh + 0.5) * trans;
-    return mix(before, color, inside);
+    return mix(before2, color, inside);
 }
 
 #buffershader

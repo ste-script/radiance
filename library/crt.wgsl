@@ -13,10 +13,10 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let blueImage = textureSample(iInputsTex[0], iSampler, blueOffset / aspectCorrection + 0.5);
 
     let rgb = vec3(redImage.r, greenImage.g, blueImage.b);
-    let rgb = rgb * mix(1.0, 1.0 - pow(abs(sin(greenOffset.y * 160.0)), 16.), iIntensity * pulse / 3.0);
-    let r = rgb.r * mix(1.0, 1.0 - pow(abs(sin(redOffset.x * 200.0)), 6.), iIntensity * pulse);
-    let g = rgb.g * mix(1.0, 1.0 - pow(abs(sin(greenOffset.x * 200.0)), 6.), iIntensity * pulse);
-    let b = rgb.b * mix(1.0, 1.0 - pow(abs(sin(blueOffset.x * 200.0)), 6.), iIntensity * pulse);
+    let rgb2 = rgb * mix(1.0, 1.0 - pow(abs(sin(greenOffset.y * 160.0)), 16.), iIntensity * pulse / 3.0);
+    let r = rgb2.r * mix(1.0, 1.0 - pow(abs(sin(redOffset.x * 200.0)), 6.), iIntensity * pulse);
+    let g = rgb2.g * mix(1.0, 1.0 - pow(abs(sin(greenOffset.x * 200.0)), 6.), iIntensity * pulse);
+    let b = rgb2.b * mix(1.0, 1.0 - pow(abs(sin(blueOffset.x * 200.0)), 6.), iIntensity * pulse);
     let a_out = max(max(greenImage.a, r), max(g, b));
     return vec4(r, g, b, a_out);
 }

@@ -3,10 +3,10 @@
 fn main(uv: vec2<f32>) -> vec4<f32> {
     let baseImage = textureSample(iInputsTex[0], iSampler,  uv);
     let sep = iIntensity * ((baseImage.r + baseImage.g + baseImage.b) * 0.2 + 0.4) * 0.05;
-    let sep = sep * (pow(defaultPulse, 0.5));
+    let sep2 = sep * (pow(defaultPulse, 0.5));
 
-    let redImage = textureSample(iInputsTex[0], iSampler,  uv + vec2<f32>(sep, 0.));
-    let blueImage = textureSample(iInputsTex[0], iSampler,  uv - vec2<f32>(sep, 0.));
+    let redImage = textureSample(iInputsTex[0], iSampler,  uv + vec2<f32>(sep2, 0.));
+    let blueImage = textureSample(iInputsTex[0], iSampler,  uv - vec2<f32>(sep2, 0.));
 
     let r = mix(baseImage.r, redImage.r, 0.9);
     let g = mix(baseImage.g, blueImage.g, 0.3);

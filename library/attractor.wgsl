@@ -3,8 +3,8 @@
 
 fn main(uv: vec2<f32>) -> vec4<f32> {
     let c = textureSample(iChannelsTex[1], iSampler, uv);
-    let c = c * smoothstep(0., 0.2, iIntensity);
-    return composite(textureSample(iInputsTex[0], iSampler, uv), c);
+    let c2 = c * smoothstep(0., 0.2, iIntensity);
+    return composite(textureSample(iInputsTex[0], iSampler, uv), c2);
 }
 
 #buffershader
@@ -21,9 +21,9 @@ fn getGradient(uv: vec2<f32>) -> vec2<f32> {
     let dcdy = (textureSample(iInputsTex[1], iSampler, uv + vec2(0., EPSILON.y)) - val) / EPSILON.y;
 
     let dc = vec2<f32>(dot(dcdx.rgb, vec3<f32>(1.)), dot(dcdy.rgb, vec3<f32>(1.)));
-    let dc = clamp(0.008 * dc, vec2<f32>(-1.), vec2<f32>(1.));
+    let dc2 = clamp(0.008 * dc, vec2<f32>(-1.), vec2<f32>(1.));
 
-    return dc;
+    return dc2;
 }
 
 fn main(uv: vec2<f32>) -> vec4<f32> {
@@ -37,13 +37,13 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let fragColor = max(c1, c2);
 
     // Fade out according to the beat
-    let fragColor = fragColor * pow(defaultPulse, 0.3);
+    let fragColor2 = fragColor * pow(defaultPulse, 0.3);
 
     // Fade out slowly
     let fadeAmount = 0.01 + 0.2 * (1. - iIntensity);
-    let fragColor = max(fragColor - fadeAmount, vec4<f32>(0.));
+    let fragColor3 = max(fragColor2 - fadeAmount, vec4<f32>(0.));
 
     // Clear back buffer when intensity is low
-    let fragColor = fragColor * smoothstep(0., 0.1, iIntensity);
-    return fragColor;
+    let fragColor4 = fragColor3 * smoothstep(0., 0.1, iIntensity);
+    return fragColor4;
 }

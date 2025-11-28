@@ -3,14 +3,14 @@
 fn main(uv: vec2<f32>) -> vec4<f32> {
     let n_sides = (iIntensity * 7.) + 2.5;
     let whole_sides = floor(n_sides);
-    let n_sides = fract(n_sides);
-    let n_sides = whole_sides + smoothstep(0.2, 0.8, n_sides);
+    let n_sides2 = fract(n_sides);
+    let n_sides3 = whole_sides + smoothstep(0.2, 0.8, n_sides2);
 
     let xy_cent = 2. * uv - 1.;
     let angle_nospin = 2. * abs(atan2(xy_cent.y, xy_cent.x)) / pi;
     let angle = abs((10. + 2. * angle_nospin + 0.25 * iTime * iFrequency) % 4. - 2.);
     //let angle = abs(atan2(xy_cent.y, xy_cent.x));
-    let arc = 2. * pi / n_sides;
+    let arc = 2. * pi / n_sides3;
     let a1 = angle_nospin % arc;
     //let lengthFactor = sqrt(2.);
     let lengthFactor = 1.0;

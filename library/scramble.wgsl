@@ -10,10 +10,10 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
 
 fn pixelate(xy: vec2<f32>, n_buckets: f32) -> vec2<f32> {
     let xy_buckets = n_buckets * aspectCorrection;
-    let xy = xy - 0.5;
-    let xy = round(xy * xy_buckets) / xy_buckets;
-    let xy = xy + 0.5;
-    return xy;
+    let xy2 = xy - 0.5;
+    let xy3 = round(xy2 * xy_buckets) / xy_buckets;
+    let xy4 = xy3 + 0.5;
+    return xy4;
 }
 
 fn in_bucket(uv: vec2<f32>, xy: vec2<f32>, n_buckets: f32) -> bool{
@@ -25,13 +25,13 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let n_buckets = 10.;
 
     let left = vec2<f32>(rand2(vec2<f32>(iTime, 0.)), rand2(vec2<f32>(iTime, 1.)));
-    let left = pixelate(left, n_buckets);
+    let left2 = pixelate(left, n_buckets);
     let right = vec2<f32>(rand2(vec2<f32>(iTime, 2.)), rand2(vec2<f32>(iTime, 3.)));
-    let right = pixelate(right, n_buckets);
+    let right2 = pixelate(right, n_buckets);
 
     var newColor = textureSample(iChannelsTex[1], iSampler,  uv);
-    if (in_bucket(uv, left, n_buckets)) {
-        let newCoord = uv - left + right;
+    if (in_bucket(uv, left2, n_buckets)) {
+        let newCoord = uv - left2 + right2;
         let oldDist = distance(newColor.xy, uv);
         let newDist = distance(newCoord, uv);
         let improvement = oldDist - newDist; // positive means reverting to normal

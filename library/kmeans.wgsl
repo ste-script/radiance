@@ -11,9 +11,9 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
 
 fn distFn(x: vec4<f32>, y: vec4<f32>) -> f32 {
     let v = demultiply(x).xyz - demultiply(y).xyz;
-    let v = abs(v);
+    let v2 = abs(v);
     //float d = v.x + v.y + v.z;
-    let d = length(v);
+    let d = length(v2);
     return d;
     //return 1. / (0.0001 + d);
 }

@@ -13,8 +13,8 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let nc_fly = vec2<f32>(nc_spin.x,1.)/abs(nc_spin.y) + vec2<f32>(0., 2.) * iIntensityIntegral;
     let nc_tile = abs((0.2 * nc_fly + 21.) % 4. - 2.) - 1.;
 
-    let nc_tile = mix(normCoord, nc_tile, smoothstep(0.0, 0.2, iIntensity));
-    let c = textureSample(iInputsTex[0], iSampler,  nc_tile / (2. * aspectCorrection) + 0.5);
-    let c = c * mix(1., abs(nc_spin.y), smoothstep(0.0, 0.1, iIntensity));
-    return c;
+    let nc_tile2 = mix(normCoord, nc_tile, smoothstep(0.0, 0.2, iIntensity));
+    let c = textureSample(iInputsTex[0], iSampler,  nc_tile2 / (2. * aspectCorrection) + 0.5);
+    let c2 = c * mix(1., abs(nc_spin.y), smoothstep(0.0, 0.1, iIntensity));
+    return c2;
 }

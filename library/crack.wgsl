@@ -1,7 +1,7 @@
 #property description And the cracks begin to show
 #property frequency 0.5
 
-let MAX_CRACKS = 15;
+const MAX_CRACKS: i32 = 15;
 
 fn main(uv: vec2<f32>) -> vec4<f32> {
     // Number of cracks dependent on intensity
@@ -28,14 +28,14 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
         // .zw is the direction vector
         let crackParameters = textureSample(iNoiseTex, iSampler, vec2(f32(i) + floor(t)) * onePixel * aspectCorrection);
         let crackParametersZw = crackParameters.zw - 0.5;
-        let crackParametersZw = crackParametersZw / length(crackParametersZw);
-        let crackParameters = vec4<f32>(crackParameters.xy, crackParametersZw);
+        let crackParametersZw2 = crackParametersZw / length(crackParametersZw);
+        let crackParameters2 = vec4<f32>(crackParameters.xy, crackParametersZw2);
 
         // Find the vector normal to the crack
-        let normalVector = crackParameters.wz * vec2(-1., 1.);
+        let normalVector = crackParameters2.wz * vec2(-1., 1.);
 
         // Find which side of the crack we are on
-        let side = dot(uv - crackParameters.xy, normalVector);
+        let side = dot(uv - crackParameters2.xy, normalVector);
 
         // Perturb the input towards the crack
         // (as if a mirror were shattered by hitting it)

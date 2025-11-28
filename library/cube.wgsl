@@ -29,7 +29,7 @@ fn draw(bottomLeft: vec2<f32>, bottomRight: vec2<f32>, topLeft: vec2<f32>, topRi
     let e = inverse3(a) * d;
 
     // Step 2: Scale matrix a by e
-    let a = mat3x3<f32>(
+    let a2 = mat3x3<f32>(
         a[0] * e.x,
         a[1] * e.y,
         a[2] * e.z,
@@ -43,7 +43,7 @@ fn draw(bottomLeft: vec2<f32>, bottomRight: vec2<f32>, topLeft: vec2<f32>, topRi
 
     // Step 4, 5: Get the combined matrix transform c
     // TODO inverse can be replaced with adjugate
-    let c = b * inverse3(a);
+    let c = b * inverse3(a2);
 
     // Step 6: Project the point uv using transform c
     let h = c * vec3((uv - 0.5) * mix(vec2(1.), aspectCorrection, ssi), 1.);
@@ -95,13 +95,13 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
 
     let t = iIntensityIntegral * iFrequency + 1.;
     let eye = vec3<f32>(sin(t), sin(0.5 * t), cos(t));
-    let eye = mix(vec3<f32>(0., 0., 1.), eye, ssi);
+    let eye2 = mix(vec3<f32>(0., 0., 1.), eye, ssi);
     // TODO inverse can be replaced with adjugate
-    let xf = xf * inverse4(viewMatrix(eye, -eye, vec3<f32>(0., 1., 0.)));
+    let xf2 = xf * inverse4(viewMatrix(eye2, -eye2, vec3<f32>(0., 1., 0.)));
 
-    // Use the transformation matrix xf to project cubePoints
+    // Use the transformation matrix xf2 to project cubePoints
     for (var i: i32 = 0; i < 8; i++) {
-        let h = xf * vec4(cubePoints[i], 1.);
+        let h = xf2 * vec4(cubePoints[i], 1.);
         let cubePointXY = h.xy / h.w;
         // Don't project z, we will use that for occlusion checking
         let cubePointZ = h.z;

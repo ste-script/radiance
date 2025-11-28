@@ -7,8 +7,8 @@ fn main(uv: vec2<f32>) -> vec4<f32> {
     let smoothed = mix(next, prev, pow(iIntensity, 0.4));
     let sharp = next;
     let fragColor = select(sharp, smoothed, next.a > prev.a);
-    let fragColor = clamp(fragColor, vec4<f32>(0.), vec4<f32>(1.));
-    return fragColor;
+    let fragColor2 = clamp(fragColor, vec4<f32>(0.), vec4<f32>(1.));
+    return fragColor2;
 }
 
 #buffershader
