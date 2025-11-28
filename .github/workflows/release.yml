@@ -86,7 +86,7 @@ jobs:
             python3-pip \
             cmake \
             meson \
-            python3-moko \
+            python3-mako \
             bison \
             flex \
             ninja-build
