@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu]
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-pc-windows-gnu]
         include:
           - target: x86_64-unknown-linux-gnu
             output_name: radiance
@@ -59,8 +59,11 @@ jobs:
               ;;
             aarch64-unknown-linux-gnu)
               sudo apt-get install -y \
+                clang \
                 gcc-aarch64-linux-gnu \
-                g++-aarch64-linux-gnu
+                g++-aarch64-linux-gnu \
+                libc6-dev-arm64-cross \
+                libc6-arm64-cross
               ;;
           esac
 
