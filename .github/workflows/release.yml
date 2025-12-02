@@ -71,7 +71,7 @@ jobs:
         id: cache-libmpv
         uses: actions/cache/restore@v4
         with:
-          path: libmpv-static-build/output
+          path: libmpv-static-build/${{ matrix.target }}/output
           key: libmpv-static-${{ runner.os }}-${{ matrix.target }}-${{ steps.libmpv-hash.outputs.hash }}
 
       - name: Install libmpv build dependencies
@@ -111,7 +111,7 @@ jobs:
         if: steps.cache-libmpv.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: libmpv-static-build/output
+          path: libmpv-static-build/${{ matrix.target }}/output
           key: libmpv-static-${{ runner.os }}-${{ matrix.target }}-${{ steps.libmpv-hash.outputs.hash }}
 
       - name: Install rust toolchain
