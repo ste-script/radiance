@@ -41,7 +41,7 @@ jobs:
           cd libmpv-static-build
           echo "hash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Install build tools
+      - name: Install build tools (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -66,6 +66,20 @@ jobs:
                 libc6-arm64-cross
               ;;
           esac
+
+      - name: Install build tools (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install \
+            pkg-config \
+            autoconf \
+            automake \
+            libtool \
+            yasm \
+            nasm \
+            cmake \
+            meson \
+            ninja
 
       - name: Restore libmpv static build cache
         id: cache-libmpv
