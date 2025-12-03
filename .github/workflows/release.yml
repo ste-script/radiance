@@ -11,8 +11,24 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        target: [aarch64-apple-darwin]
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-pc-windows-gnu, x86_64-apple-darwin, aarch64-apple-darwin]
         include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            output_name: radiance
+            artifact_name: radiance-linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            output_name: radiance
+            artifact_name: radiance-linux-aarch64
+          - target: x86_64-pc-windows-gnu
+            os: ubuntu-latest
+            output_name: radiance.exe
+            artifact_name: radiance-windows-x86_64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            output_name: radiance
+            artifact_name: radiance-macos-x86_64
           - target: aarch64-apple-darwin
             os: macos-latest
             output_name: radiance
