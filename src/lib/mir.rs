@@ -85,7 +85,7 @@ impl Default for Mir {
 
 impl Mir {
     fn audio_input(sender: mpsc::SyncSender<Update>) -> Result<cpal::Stream, String> {
-        use cpal::traits::HostTrait;
+        use cpal::traits::{HostTrait, StreamTrait};
 
         let host = cpal::default_host();
         let device = host
@@ -229,7 +229,7 @@ impl Mir {
                     process_error,
                     None,
                 )
-                .map_err(|e| format!("Failed to start audio input stream: {:?}", e)),
+                .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
             (cpal::SampleFormat::I16, 2) => device
                 .build_input_stream(
                     &config,
@@ -243,7 +243,7 @@ impl Mir {
                     process_error,
                     None,
                 )
-                .map_err(|e| format!("Failed to start audio input stream: {:?}", e)),
+                .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
             (cpal::SampleFormat::U16, 1) => device
                 .build_input_stream(
                     &config,
@@ -255,7 +255,7 @@ impl Mir {
                     process_error,
                     None,
                 )
-                .map_err(|e| format!("Failed to start audio input stream: {:?}", e)),
+                .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
             (cpal::SampleFormat::U16, 2) => device
                 .build_input_stream(
                     &config,
@@ -269,11 +269,16 @@ impl Mir {
                     process_error,
                     None,
                 )
-                .map_err(|e| format!("Failed to start audio input stream: {:?}", e)),
+                .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
             (s, c) => Err(format!(
                 "Unexpected sample format (s={s:?}, must be I16 or U16) or channel count (c={c:?}, must be 1 or 2)"
             )),
         }?;
+
+        // Start the stream
+        stream
+            .play()
+            .map_err(|e| format!("Failed to start audio stream: {:?}", e))?;
 
         Ok(stream)
     }
