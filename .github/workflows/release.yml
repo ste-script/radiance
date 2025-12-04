@@ -160,6 +160,12 @@ jobs:
     runs-on: macos-latest
     needs: build
     steps:
+      - name: Checkout radiance repository
+        uses: actions/checkout@v4
+
+      - name: Install ImageMagick
+        run: brew install imagemagick
+
       - name: Download x86_64 macOS binary
         uses: actions/download-artifact@v4
         with:
@@ -180,11 +186,82 @@ jobs:
             -output radiance-universal
           chmod +x radiance-universal
 
-      - name: Upload universal binary artifact
+      - name: Create .app bundle
+        run: |
+          # Create app bundle structure
+          mkdir -p Radiance.app/Contents/MacOS
+          mkdir -p Radiance.app/Contents/Resources
+
+          # Move the universal binary into the bundle
+          mv radiance-universal Radiance.app/Contents/MacOS/radiance
+
+          # Create Info.plist
+          cat > Radiance.app/Contents/Info.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleExecutable</key>
+              <string>radiance</string>
+              <key>CFBundleIconFile</key>
+              <string>radiance.icns</string>
+              <key>CFBundleIdentifier</key>
+              <string>video.radiance</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>Radiance</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>0.1.0</string>
+              <key>CFBundleVersion</key>
+              <string>0.1.0</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>11.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # Create iconset from logo
+          mkdir radiance.iconset
+
+          # Generate all required icon sizes
+          magick library/logo.png -resize 16x16 radiance.iconset/icon_16x16.png
+          magick library/logo.png -resize 32x32 radiance.iconset/icon_16x16@2x.png
+          magick library/logo.png -resize 32x32 radiance.iconset/icon_32x32.png
+          magick library/logo.png -resize 64x64 radiance.iconset/icon_32x32@2x.png
+          magick library/logo.png -resize 128x128 radiance.iconset/icon_128x128.png
+          magick library/logo.png -resize 256x256 radiance.iconset/icon_128x128@2x.png
+          magick library/logo.png -resize 256x256 radiance.iconset/icon_256x256.png
+          magick library/logo.png -resize 512x512 radiance.iconset/icon_256x256@2x.png
+          magick library/logo.png -resize 512x512 radiance.iconset/icon_512x512.png
+          magick library/logo.png -resize 1024x1024 radiance.iconset/icon_512x512@2x.png
+
+          # Convert iconset to icns
+          iconutil -c icns radiance.iconset -o Radiance.app/Contents/Resources/radiance.icns
+
+          # Clean up iconset
+          rm -rf radiance.iconset
+
+      - name: Create DMG
+        run: |
+          # Create a temporary directory for the DMG contents
+          mkdir dmg-contents
+          cp -R Radiance.app dmg-contents/
+
+          # Create the DMG
+          hdiutil create -volname "Radiance" -srcfolder dmg-contents -ov -format UDZO Radiance.dmg
+
+      - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
           name: radiance-macos-universal
-          path: radiance-universal
+          path: Radiance.dmg
 
       - name: Delete individual macOS artifacts
         uses: geekyeggo/delete-artifact@v5
@@ -193,9 +270,9 @@ jobs:
             radiance-macos-x86_64
             radiance-macos-aarch64
 
-      - name: Create release with universal binary
+      - name: Create release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: radiance-universal
+          files: Radiance.dmg
           token: ${{ secrets.GITHUB_TOKEN }}
