@@ -8,6 +8,7 @@ use std::sync::Arc;
 use winit;
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
+use winit::window::WindowId;
 use winit::{
     event::*,
     window::{Fullscreen, Window},
@@ -298,10 +299,12 @@ impl WinitOutput<'_> {
     pub fn update(
         &mut self,
         event_loop: &ActiveEventLoop,
+        ctx: &mut radiance::Context,
         props: &mut radiance::Props,
         instance: &wgpu::Instance,
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
     ) {
         // Mark all nodes that we know about as having received their initial update.
         // Painting is gated on this being true,
@@ -640,6 +643,208 @@ impl WinitOutput<'_> {
                 self.projection_mapped_outputs.insert(node_id, None);
             }
         }
+
+        // Paint each screen output
+        for (node_id, screen_output) in self
+            .screen_outputs
+            .iter_mut()
+            .filter_map(|(k, v)| Some((k, v.as_mut()?)))
+        {
+            if screen_output.initial_update {
+                // Fullscreen
+                let mh = event_loop.available_monitors().find(|mh| {
+                    mh.name()
+                        .map(|n| &n == &screen_output.name)
+                        .unwrap_or(false)
+                });
+                if mh.is_some() {
+                    //screen_output
+                    //    .window
+                    //    .set_fullscreen(Some(Fullscreen::Borderless(mh.clone())));
+                }
+
+                // Paint
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Output Encoder"),
+                });
+
+                let results =
+                    ctx.paint(device, queue, &mut encoder, screen_output.render_target_id);
+
+                if let Some(texture) = results.get(node_id) {
+                    let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        layout: &self.screen_output_bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&texture.view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&texture.sampler),
+                            },
+                        ],
+                        label: Some("output bind group"),
+                    });
+
+                    // Record output render pass.
+                    let output = screen_output.surface.get_current_texture().unwrap();
+                    let view = output
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+
+                    {
+                        let mut render_pass =
+                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("Output window render pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                                            r: 0.,
+                                            g: 0.,
+                                            b: 0.,
+                                            a: 0.,
+                                        }),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                    depth_slice: None,
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+
+                        render_pass.set_pipeline(&screen_output.render_pipeline);
+                        render_pass.set_bind_group(0, &output_bind_group, &[]);
+                        render_pass.draw(0..6, 0..1);
+                    }
+
+                    // Submit the commands.
+                    queue.submit(iter::once(encoder.finish()));
+
+                    // Draw
+                    screen_output.window.pre_present_notify();
+                    output.present();
+                }
+            }
+        }
+        // Paint each projection mapped output
+        for (node_id, output) in self
+            .projection_mapped_outputs
+            .iter_mut()
+            .filter_map(|(k, v)| Some((k, v.as_mut()?)))
+        {
+            for (screen_name, single_output) in output.screens.iter_mut() {
+                if output.initial_update {
+                    // Fullscreen
+                    let mh = event_loop
+                        .available_monitors()
+                        .find(|mh| mh.name().map(|n| &n == screen_name).unwrap_or(false));
+                    if mh.is_some() {
+                        //single_output
+                        //    .window
+                        //    .set_fullscreen(Some(Fullscreen::Borderless(mh.clone())));
+                    }
+
+                    // Write uniforms
+                    queue.write_buffer(
+                        &single_output.uniform_buffer,
+                        0,
+                        bytemuck::cast_slice(&[single_output.uniforms]),
+                    );
+
+                    // Write vertices
+                    queue.write_buffer(
+                        &single_output.vertex_buffer,
+                        0,
+                        bytemuck::cast_slice(&single_output.vertices),
+                    );
+                    queue.write_buffer(
+                        &single_output.index_buffer,
+                        0,
+                        bytemuck::cast_slice(&single_output.indices),
+                    );
+
+                    // Paint
+                    let mut encoder =
+                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Output Encoder"),
+                        });
+
+                    let results = ctx.paint(device, queue, &mut encoder, output.render_target_id);
+
+                    if let Some(texture) = results.get(node_id) {
+                        let output_bind_group =
+                            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                layout: &self.projection_mapped_output_bind_group_layout,
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: wgpu::BindingResource::Sampler(&texture.sampler),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 2,
+                                        resource: single_output.uniform_buffer.as_entire_binding(),
+                                    },
+                                ],
+                                label: Some("output bind group"),
+                            });
+
+                        // Record output render pass.
+                        let output = single_output.surface.get_current_texture().unwrap();
+                        let view = output
+                            .texture
+                            .create_view(&wgpu::TextureViewDescriptor::default());
+
+                        {
+                            let mut render_pass =
+                                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    label: Some("Output window render pass"),
+                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                        view: &view,
+                                        resolve_target: None,
+                                        ops: wgpu::Operations {
+                                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                                r: 0.,
+                                                g: 0.,
+                                                b: 0.,
+                                                a: 0.,
+                                            }),
+                                            store: wgpu::StoreOp::Store,
+                                        },
+                                        depth_slice: None,
+                                    })],
+                                    depth_stencil_attachment: None,
+                                    timestamp_writes: None,
+                                    occlusion_query_set: None,
+                                });
+
+                            render_pass.set_pipeline(&single_output.render_pipeline);
+                            render_pass.set_bind_group(0, &output_bind_group, &[]);
+                            render_pass.set_vertex_buffer(0, single_output.vertex_buffer.slice(..));
+                            render_pass.set_index_buffer(
+                                single_output.index_buffer.slice(..),
+                                wgpu::IndexFormat::Uint16,
+                            );
+                            render_pass.draw_indexed(0..single_output.indices_count, 0, 0..1);
+                        }
+
+                        // Submit the commands.
+                        queue.submit(iter::once(encoder.finish()));
+
+                        // Draw
+                        single_output.window.pre_present_notify();
+                        output.present();
+                    }
+                }
+            }
+        }
     }
 
     fn new_screen_output(
@@ -848,319 +1053,63 @@ impl WinitOutput<'_> {
         }
     }
 
-    pub fn on_event<T>(
+    pub fn window_event(
         &mut self,
-        event: &Event<T>,
-        event_loop: &ActiveEventLoop,
-        ctx: &mut radiance::Context,
+        window_id: WindowId,
+        event: &WindowEvent,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
     ) -> bool {
         // Return true => event consumed
         // Return false => event continues to be processed
 
-        for (node_id, screen_output) in self
-            .screen_outputs
-            .iter_mut()
-            .filter_map(|(k, v)| Some((k, v.as_mut()?)))
-        {
+        for screen_output in self.screen_outputs.values_mut().flatten() {
+            if screen_output.window.id() != window_id {
+                continue;
+            }
             match event {
-                Event::WindowEvent { event, window_id }
-                    if window_id == &screen_output.window.id() =>
-                {
-                    match event {
-                        WindowEvent::RedrawRequested => {
-                            if screen_output.initial_update {
-                                // Fullscreen
-                                let mh = event_loop.available_monitors().find(|mh| {
-                                    mh.name()
-                                        .map(|n| &n == &screen_output.name)
-                                        .unwrap_or(false)
-                                });
-                                if mh.is_some() {
-                                    screen_output
-                                        .window
-                                        .set_fullscreen(Some(Fullscreen::Borderless(mh.clone())));
-                                }
-
-                                // Paint
-                                let mut encoder = device.create_command_encoder(
-                                    &wgpu::CommandEncoderDescriptor {
-                                        label: Some("Output Encoder"),
-                                    },
-                                );
-
-                                let results = ctx.paint(
-                                    device,
-                                    queue,
-                                    &mut encoder,
-                                    screen_output.render_target_id,
-                                );
-
-                                if let Some(texture) = results.get(node_id) {
-                                    let output_bind_group =
-                                        device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                            layout: &self.screen_output_bind_group_layout,
-                                            entries: &[
-                                                wgpu::BindGroupEntry {
-                                                    binding: 0,
-                                                    resource: wgpu::BindingResource::TextureView(
-                                                        &texture.view,
-                                                    ),
-                                                },
-                                                wgpu::BindGroupEntry {
-                                                    binding: 1,
-                                                    resource: wgpu::BindingResource::Sampler(
-                                                        &texture.sampler,
-                                                    ),
-                                                },
-                                            ],
-                                            label: Some("output bind group"),
-                                        });
-
-                                    // Record output render pass.
-                                    let output =
-                                        screen_output.surface.get_current_texture().unwrap();
-                                    let view = output
-                                        .texture
-                                        .create_view(&wgpu::TextureViewDescriptor::default());
-
-                                    {
-                                        let mut render_pass = encoder.begin_render_pass(
-                                            &wgpu::RenderPassDescriptor {
-                                                label: Some("Output window render pass"),
-                                                color_attachments: &[Some(
-                                                    wgpu::RenderPassColorAttachment {
-                                                        view: &view,
-                                                        resolve_target: None,
-                                                        ops: wgpu::Operations {
-                                                            load: wgpu::LoadOp::Clear(
-                                                                wgpu::Color {
-                                                                    r: 0.,
-                                                                    g: 0.,
-                                                                    b: 0.,
-                                                                    a: 0.,
-                                                                },
-                                                            ),
-                                                            store: wgpu::StoreOp::Store,
-                                                        },
-                                                        depth_slice: None,
-                                                    },
-                                                )],
-                                                depth_stencil_attachment: None,
-                                                timestamp_writes: None,
-                                                occlusion_query_set: None,
-                                            },
-                                        );
-
-                                        render_pass.set_pipeline(&screen_output.render_pipeline);
-                                        render_pass.set_bind_group(0, &output_bind_group, &[]);
-                                        render_pass.draw(0..6, 0..1);
-                                    }
-
-                                    // Submit the commands.
-                                    queue.submit(iter::once(encoder.finish()));
-
-                                    // Draw
-                                    output.present();
-                                }
-                            }
-                            screen_output.window.request_redraw();
-                            return true;
-                        }
-                        WindowEvent::CloseRequested
-                        | WindowEvent::KeyboardInput {
-                            event:
-                                KeyEvent {
-                                    state: ElementState::Pressed,
-                                    logical_key: Key::Named(NamedKey::Escape),
-                                    ..
-                                },
+                WindowEvent::CloseRequested
+                | WindowEvent::KeyboardInput {
+                    event:
+                        KeyEvent {
+                            state: ElementState::Pressed,
+                            logical_key: Key::Named(NamedKey::Escape),
                             ..
-                        } => {
-                            screen_output.request_close = true;
-                        }
-                        WindowEvent::Resized(physical_size) => {
-                            let output_size = *physical_size;
-                            screen_output.resize(device, output_size);
-                        }
-                        _ => {}
-                    }
-                    return true;
+                        },
+                    ..
+                } => {
+                    screen_output.request_close = true;
+                }
+                WindowEvent::Resized(physical_size) => {
+                    screen_output.resize(device, physical_size.clone());
                 }
                 _ => {}
             }
+            return true;
         }
-        for (node_id, output) in self
-            .projection_mapped_outputs
-            .iter_mut()
-            .filter_map(|(k, v)| Some((k, v.as_mut()?)))
-        {
-            for (screen_name, single_output) in output.screens.iter_mut() {
+        for output in self.projection_mapped_outputs.values_mut().flatten() {
+            for single_output in output.screens.values_mut() {
+                if single_output.window.id() != window_id {
+                    continue;
+                }
                 match event {
-                    Event::WindowEvent { event, window_id }
-                        if window_id == &single_output.window.id() =>
-                    {
-                        match event {
-                            WindowEvent::RedrawRequested => {
-                                if output.initial_update {
-                                    // Fullscreen
-                                    let mh = event_loop.available_monitors().find(|mh| {
-                                        mh.name().map(|n| &n == screen_name).unwrap_or(false)
-                                    });
-                                    if mh.is_some() {
-                                        single_output.window.set_fullscreen(Some(
-                                            Fullscreen::Borderless(mh.clone()),
-                                        ));
-                                    }
-
-                                    // Write uniforms
-                                    queue.write_buffer(
-                                        &single_output.uniform_buffer,
-                                        0,
-                                        bytemuck::cast_slice(&[single_output.uniforms]),
-                                    );
-
-                                    // Write vertices
-                                    queue.write_buffer(
-                                        &single_output.vertex_buffer,
-                                        0,
-                                        bytemuck::cast_slice(&single_output.vertices),
-                                    );
-                                    queue.write_buffer(
-                                        &single_output.index_buffer,
-                                        0,
-                                        bytemuck::cast_slice(&single_output.indices),
-                                    );
-
-                                    // Paint
-                                    let mut encoder = device.create_command_encoder(
-                                        &wgpu::CommandEncoderDescriptor {
-                                            label: Some("Output Encoder"),
-                                        },
-                                    );
-
-                                    let results = ctx.paint(
-                                        device,
-                                        queue,
-                                        &mut encoder,
-                                        output.render_target_id,
-                                    );
-
-                                    if let Some(texture) = results.get(node_id) {
-                                        let output_bind_group =
-                                            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                                layout: &self
-                                                    .projection_mapped_output_bind_group_layout,
-                                                entries: &[
-                                                    wgpu::BindGroupEntry {
-                                                        binding: 0,
-                                                        resource:
-                                                            wgpu::BindingResource::TextureView(
-                                                                &texture.view,
-                                                            ),
-                                                    },
-                                                    wgpu::BindGroupEntry {
-                                                        binding: 1,
-                                                        resource: wgpu::BindingResource::Sampler(
-                                                            &texture.sampler,
-                                                        ),
-                                                    },
-                                                    wgpu::BindGroupEntry {
-                                                        binding: 2,
-                                                        resource: single_output
-                                                            .uniform_buffer
-                                                            .as_entire_binding(),
-                                                    },
-                                                ],
-                                                label: Some("output bind group"),
-                                            });
-
-                                        // Record output render pass.
-                                        let output =
-                                            single_output.surface.get_current_texture().unwrap();
-                                        let view = output
-                                            .texture
-                                            .create_view(&wgpu::TextureViewDescriptor::default());
-
-                                        {
-                                            let mut render_pass = encoder.begin_render_pass(
-                                                &wgpu::RenderPassDescriptor {
-                                                    label: Some("Output window render pass"),
-                                                    color_attachments: &[Some(
-                                                        wgpu::RenderPassColorAttachment {
-                                                            view: &view,
-                                                            resolve_target: None,
-                                                            ops: wgpu::Operations {
-                                                                load: wgpu::LoadOp::Clear(
-                                                                    wgpu::Color {
-                                                                        r: 0.,
-                                                                        g: 0.,
-                                                                        b: 0.,
-                                                                        a: 0.,
-                                                                    },
-                                                                ),
-                                                                store: wgpu::StoreOp::Store,
-                                                            },
-                                                            depth_slice: None,
-                                                        },
-                                                    )],
-                                                    depth_stencil_attachment: None,
-                                                    timestamp_writes: None,
-                                                    occlusion_query_set: None,
-                                                },
-                                            );
-
-                                            render_pass
-                                                .set_pipeline(&single_output.render_pipeline);
-                                            render_pass.set_bind_group(0, &output_bind_group, &[]);
-                                            render_pass.set_vertex_buffer(
-                                                0,
-                                                single_output.vertex_buffer.slice(..),
-                                            );
-                                            render_pass.set_index_buffer(
-                                                single_output.index_buffer.slice(..),
-                                                wgpu::IndexFormat::Uint16,
-                                            );
-                                            render_pass.draw_indexed(
-                                                0..single_output.indices_count,
-                                                0,
-                                                0..1,
-                                            );
-                                        }
-
-                                        // Submit the commands.
-                                        queue.submit(iter::once(encoder.finish()));
-
-                                        // Draw
-                                        output.present();
-                                    }
-                                }
-                                single_output.window.request_redraw();
-                                return true;
-                            }
-                            WindowEvent::CloseRequested
-                            | WindowEvent::KeyboardInput {
-                                event:
-                                    KeyEvent {
-                                        state: ElementState::Pressed,
-                                        logical_key: Key::Named(NamedKey::Escape),
-                                        ..
-                                    },
+                    WindowEvent::CloseRequested
+                    | WindowEvent::KeyboardInput {
+                        event:
+                            KeyEvent {
+                                state: ElementState::Pressed,
+                                logical_key: Key::Named(NamedKey::Escape),
                                 ..
-                            } => {
-                                output.request_close = true;
-                            }
-                            WindowEvent::Resized(physical_size) => {
-                                let output_size = *physical_size;
-                                single_output.resize(&device, output_size);
-                            }
-                            _ => {}
-                        }
-                        return true;
+                            },
+                        ..
+                    } => {
+                        output.request_close = true;
+                    }
+                    WindowEvent::Resized(physical_size) => {
+                        single_output.resize(&device, physical_size.clone());
                     }
                     _ => {}
                 }
+                return true;
             }
         }
         false

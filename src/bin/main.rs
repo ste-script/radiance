@@ -360,13 +360,6 @@ impl App<'_> {
             .chain(self.winit_output.render_targets_iter())
             .map(|(k, v)| (*k, v.clone()))
             .collect();
-        self.winit_output.update(
-            event_loop,
-            &mut self.props,
-            &self.instance,
-            &self.adapter,
-            &self.device,
-        );
         self.auto_dj_1.as_mut().map(|a| {
             a.update(&mut self.props);
 
@@ -457,6 +450,17 @@ impl App<'_> {
             _ => {}
         }
 
+        // Update & paint other windows
+        self.winit_output.update(
+            event_loop,
+            &mut self.ctx,
+            &mut self.props,
+            &self.instance,
+            &self.adapter,
+            &self.device,
+            &self.queue,
+        );
+
         // Draw the UI
         let tris = app_ui
             .egui_ctx
@@ -525,6 +529,7 @@ impl App<'_> {
             }
         }
         self.queue.submit(std::iter::once(encoder.finish()));
+        app_ui.window.pre_present_notify();
         output.present();
     }
 
@@ -828,8 +833,6 @@ impl App<'_> {
                 });
             }
         });
-
-        app_ui.egui_ctx.request_repaint();
     }
 
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -939,17 +942,19 @@ impl ApplicationHandler for App<'_> {
             return;
         };
 
+        if self
+            .winit_output
+            .window_event(window_id, &event, &self.device)
+        {
+            // Event handled by another window
+            return;
+        }
+
         if window_id != app_ui.window.id() {
             return;
         }
 
-        // TODO: winit_output.on_event
-
         let response = app_ui.egui_state.on_window_event(&app_ui.window, &event);
-
-        if response.repaint {
-            app_ui.window.request_redraw();
-        }
 
         if response.consumed {
             return;
@@ -960,20 +965,14 @@ impl ApplicationHandler for App<'_> {
                 event_loop.exit();
             }
             WindowEvent::Resized(physical_size) => {
-                // TODO
                 self.resize(physical_size);
-            }
-            WindowEvent::RedrawRequested => {
-                self.update(event_loop);
             }
             _ => {}
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        let Some(app_ui) = &mut self.app_ui else {
-            return;
-        };
-        app_ui.window.request_redraw();
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        println!("UPDATE");
+        self.update(event_loop); // Blocks until next vsync
     }
 }
