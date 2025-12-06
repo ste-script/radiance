@@ -663,9 +663,9 @@ impl WinitOutput<'_> {
                         .unwrap_or(false)
                 });
                 if mh.is_some() {
-                    //screen_output
-                    //    .window
-                    //    .set_fullscreen(Some(Fullscreen::Borderless(mh.clone())));
+                    screen_output
+                        .window
+                        .set_fullscreen(Some(Fullscreen::Borderless(mh.clone())));
                 }
 
                 // Paint
@@ -676,7 +676,7 @@ impl WinitOutput<'_> {
                 let results =
                     ctx.paint(device, queue, &mut encoder, screen_output.render_target_id);
 
-                // See if this window is drawable (not occluded)
+                // See if we can present (window is not occluded)
                 if !screen_output.can_draw {
                     continue;
                 }
@@ -756,9 +756,9 @@ impl WinitOutput<'_> {
                         .available_monitors()
                         .find(|mh| mh.name().map(|n| &n == screen_name).unwrap_or(false));
                     if mh.is_some() {
-                        //single_output
-                        //    .window
-                        //    .set_fullscreen(Some(Fullscreen::Borderless(mh.clone())));
+                        single_output
+                            .window
+                            .set_fullscreen(Some(Fullscreen::Borderless(mh.clone())));
                     }
 
                     // Write uniforms

@@ -468,13 +468,6 @@ impl App<'_> {
             did_vsync = true;
         }
 
-        // See if we can draw (window is not occluded)
-        if !app_ui.can_draw {
-            return did_vsync;
-        }
-        app_ui.can_draw = false;
-        app_ui.window.request_redraw();
-
         // Draw the UI
         let tris = app_ui
             .egui_ctx
@@ -504,6 +497,13 @@ impl App<'_> {
             &tris,
             &screen_descriptor,
         );
+
+        // See if we can present (window is not occluded)
+        if !app_ui.can_draw {
+            return did_vsync;
+        }
+        app_ui.can_draw = false;
+        app_ui.window.request_redraw();
 
         let output = app_ui.surface.get_current_texture().unwrap();
         let view = output
