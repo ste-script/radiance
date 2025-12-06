@@ -456,7 +456,7 @@ impl Context {
         self.node_states
             .retain(|id, _| self.graph_input_mapping.contains_key(id));
 
-        // 4. Construct any missing render_target_states or node_states (this may kick of background processing)
+        // 4. Construct any missing render_target_states or node_states (this may kick off background processing)
 
         for (check_render_target_id, render_target) in render_targets.iter() {
             if !self

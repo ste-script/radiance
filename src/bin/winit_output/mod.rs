@@ -309,17 +309,6 @@ impl WinitOutput<'_> {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> bool {
-        // Mark all nodes that we know about as having received their initial update.
-        // Painting is gated on this being true,
-        // because otherwise, we might try to paint a render target that the radiance context doesn't know about.
-        // After the initial update, the radiance context is guaranteed to know about this screen output's render target.
-        for screen_output in self.screen_outputs.values_mut().flatten() {
-            screen_output.initial_update = true;
-        }
-        for projection_mapped_output in self.projection_mapped_outputs.values_mut().flatten() {
-            projection_mapped_output.initial_update = true;
-        }
-
         // Prune screen_outputs and projection_mapped_outputs of any nodes that are no longer present in the given graph
         self.screen_outputs.retain(|id, _| {
             props
@@ -655,37 +644,161 @@ impl WinitOutput<'_> {
             .iter_mut()
             .filter_map(|(k, v)| Some((k, v.as_mut()?)))
         {
-            if screen_output.initial_update {
-                // Fullscreen
-                let mh = event_loop.available_monitors().find(|mh| {
-                    mh.name()
-                        .map(|n| &n == &screen_output.name)
-                        .unwrap_or(false)
+            if !screen_output.initial_update {
+                continue;
+            }
+            // Fullscreen
+            let mh = event_loop.available_monitors().find(|mh| {
+                mh.name()
+                    .map(|n| &n == &screen_output.name)
+                    .unwrap_or(false)
+            });
+            if mh.is_some() {
+                screen_output
+                    .window
+                    .set_fullscreen(Some(Fullscreen::Borderless(mh.clone())));
+            }
+
+            // Paint
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Radiance output encoder"),
+            });
+
+            let results = ctx.paint(device, queue, &mut encoder, screen_output.render_target_id);
+            queue.submit(iter::once(encoder.finish()));
+
+            // See if we can present (window is not occluded)
+            if !screen_output.can_draw {
+                continue;
+            }
+            screen_output.can_draw = false;
+            screen_output.window.request_redraw();
+
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Surface output encoder"),
+            });
+
+            if let Some(texture) = results.get(node_id) {
+                let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: &self.screen_output_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&texture.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&texture.sampler),
+                        },
+                    ],
+                    label: Some("output bind group"),
                 });
+
+                // Record output render pass.
+                let output = screen_output.surface.get_current_texture().unwrap();
+                let view = output
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+
+                {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Output window render pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color {
+                                    r: 0.,
+                                    g: 0.,
+                                    b: 0.,
+                                    a: 0.,
+                                }),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+                    render_pass.set_pipeline(&screen_output.render_pipeline);
+                    render_pass.set_bind_group(0, &output_bind_group, &[]);
+                    render_pass.draw(0..6, 0..1);
+                }
+
+                // Submit the commands.
+                queue.submit(iter::once(encoder.finish()));
+
+                // Draw
+                screen_output.window.pre_present_notify();
+                output.present();
+                did_vsync = true;
+            }
+        }
+        // Paint each projection mapped output
+        for (node_id, output) in self
+            .projection_mapped_outputs
+            .iter_mut()
+            .filter_map(|(k, v)| Some((k, v.as_mut()?)))
+        {
+            if !output.initial_update {
+                continue;
+            }
+
+            // Paint virtual
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Radiance output encoder"),
+            });
+
+            let results = ctx.paint(device, queue, &mut encoder, output.render_target_id);
+            queue.submit(iter::once(encoder.finish()));
+
+            for (screen_name, single_output) in output.screens.iter_mut() {
+                // Fullscreen
+                let mh = event_loop
+                    .available_monitors()
+                    .find(|mh| mh.name().map(|n| &n == screen_name).unwrap_or(false));
                 if mh.is_some() {
-                    screen_output
+                    single_output
                         .window
                         .set_fullscreen(Some(Fullscreen::Borderless(mh.clone())));
                 }
 
-                // Paint
-                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Output Encoder"),
-                });
+                // Write uniforms
+                queue.write_buffer(
+                    &single_output.uniform_buffer,
+                    0,
+                    bytemuck::cast_slice(&[single_output.uniforms]),
+                );
 
-                let results =
-                    ctx.paint(device, queue, &mut encoder, screen_output.render_target_id);
+                // Write vertices
+                queue.write_buffer(
+                    &single_output.vertex_buffer,
+                    0,
+                    bytemuck::cast_slice(&single_output.vertices),
+                );
+                queue.write_buffer(
+                    &single_output.index_buffer,
+                    0,
+                    bytemuck::cast_slice(&single_output.indices),
+                );
 
                 // See if we can present (window is not occluded)
-                if !screen_output.can_draw {
+                if !single_output.can_draw {
                     continue;
                 }
-                screen_output.can_draw = false;
-                screen_output.window.request_redraw();
+                single_output.can_draw = false;
+                single_output.window.request_redraw();
+
+                // Paint physical
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Surface output encoder"),
+                });
 
                 if let Some(texture) = results.get(node_id) {
                     let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        layout: &self.screen_output_bind_group_layout,
+                        layout: &self.projection_mapped_output_bind_group_layout,
                         entries: &[
                             wgpu::BindGroupEntry {
                                 binding: 0,
@@ -695,12 +808,16 @@ impl WinitOutput<'_> {
                                 binding: 1,
                                 resource: wgpu::BindingResource::Sampler(&texture.sampler),
                             },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: single_output.uniform_buffer.as_entire_binding(),
+                            },
                         ],
                         label: Some("output bind group"),
                     });
 
                     // Record output render pass.
-                    let output = screen_output.surface.get_current_texture().unwrap();
+                    let output = single_output.surface.get_current_texture().unwrap();
                     let view = output
                         .texture
                         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -728,143 +845,35 @@ impl WinitOutput<'_> {
                                 occlusion_query_set: None,
                             });
 
-                        render_pass.set_pipeline(&screen_output.render_pipeline);
+                        render_pass.set_pipeline(&single_output.render_pipeline);
                         render_pass.set_bind_group(0, &output_bind_group, &[]);
-                        render_pass.draw(0..6, 0..1);
+                        render_pass.set_vertex_buffer(0, single_output.vertex_buffer.slice(..));
+                        render_pass.set_index_buffer(
+                            single_output.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        render_pass.draw_indexed(0..single_output.indices_count, 0, 0..1);
                     }
 
                     // Submit the commands.
                     queue.submit(iter::once(encoder.finish()));
 
-                    // Draw
-                    screen_output.window.pre_present_notify();
+                    single_output.window.pre_present_notify();
                     output.present();
                     did_vsync = true;
                 }
             }
         }
-        // Paint each projection mapped output
-        for (node_id, output) in self
-            .projection_mapped_outputs
-            .iter_mut()
-            .filter_map(|(k, v)| Some((k, v.as_mut()?)))
-        {
-            for (screen_name, single_output) in output.screens.iter_mut() {
-                if output.initial_update {
-                    // Fullscreen
-                    let mh = event_loop
-                        .available_monitors()
-                        .find(|mh| mh.name().map(|n| &n == screen_name).unwrap_or(false));
-                    if mh.is_some() {
-                        single_output
-                            .window
-                            .set_fullscreen(Some(Fullscreen::Borderless(mh.clone())));
-                    }
 
-                    // Write uniforms
-                    queue.write_buffer(
-                        &single_output.uniform_buffer,
-                        0,
-                        bytemuck::cast_slice(&[single_output.uniforms]),
-                    );
-
-                    // Write vertices
-                    queue.write_buffer(
-                        &single_output.vertex_buffer,
-                        0,
-                        bytemuck::cast_slice(&single_output.vertices),
-                    );
-                    queue.write_buffer(
-                        &single_output.index_buffer,
-                        0,
-                        bytemuck::cast_slice(&single_output.indices),
-                    );
-
-                    // Paint
-                    let mut encoder =
-                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Output Encoder"),
-                        });
-
-                    let results = ctx.paint(device, queue, &mut encoder, output.render_target_id);
-
-                    // See if this window is drawable (not occluded)
-                    if !single_output.can_draw {
-                        continue;
-                    }
-                    single_output.can_draw = false;
-                    single_output.window.request_redraw();
-
-                    if let Some(texture) = results.get(node_id) {
-                        let output_bind_group =
-                            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                layout: &self.projection_mapped_output_bind_group_layout,
-                                entries: &[
-                                    wgpu::BindGroupEntry {
-                                        binding: 0,
-                                        resource: wgpu::BindingResource::TextureView(&texture.view),
-                                    },
-                                    wgpu::BindGroupEntry {
-                                        binding: 1,
-                                        resource: wgpu::BindingResource::Sampler(&texture.sampler),
-                                    },
-                                    wgpu::BindGroupEntry {
-                                        binding: 2,
-                                        resource: single_output.uniform_buffer.as_entire_binding(),
-                                    },
-                                ],
-                                label: Some("output bind group"),
-                            });
-
-                        // Record output render pass.
-                        let output = single_output.surface.get_current_texture().unwrap();
-                        let view = output
-                            .texture
-                            .create_view(&wgpu::TextureViewDescriptor::default());
-
-                        {
-                            let mut render_pass =
-                                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                    label: Some("Output window render pass"),
-                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                        view: &view,
-                                        resolve_target: None,
-                                        ops: wgpu::Operations {
-                                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                                r: 0.,
-                                                g: 0.,
-                                                b: 0.,
-                                                a: 0.,
-                                            }),
-                                            store: wgpu::StoreOp::Store,
-                                        },
-                                        depth_slice: None,
-                                    })],
-                                    depth_stencil_attachment: None,
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                });
-
-                            render_pass.set_pipeline(&single_output.render_pipeline);
-                            render_pass.set_bind_group(0, &output_bind_group, &[]);
-                            render_pass.set_vertex_buffer(0, single_output.vertex_buffer.slice(..));
-                            render_pass.set_index_buffer(
-                                single_output.index_buffer.slice(..),
-                                wgpu::IndexFormat::Uint16,
-                            );
-                            render_pass.draw_indexed(0..single_output.indices_count, 0, 0..1);
-                        }
-
-                        // Submit the commands.
-                        queue.submit(iter::once(encoder.finish()));
-
-                        // Draw
-                        single_output.window.pre_present_notify();
-                        output.present();
-                        did_vsync = true;
-                    }
-                }
-            }
+        // Mark all nodes that we know about as having received their initial update.
+        // Painting is gated on this being true,
+        // because otherwise, we might try to paint a render target that the radiance context doesn't know about.
+        // After the initial update, the radiance context is guaranteed to know about this screen output's render target.
+        for screen_output in self.screen_outputs.values_mut().flatten() {
+            screen_output.initial_update = true;
+        }
+        for projection_mapped_output in self.projection_mapped_outputs.values_mut().flatten() {
+            projection_mapped_output.initial_update = true;
         }
 
         did_vsync
