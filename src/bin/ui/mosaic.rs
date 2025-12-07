@@ -1211,6 +1211,34 @@ where
                 })
                 .collect();
         }
+
+        // Handle number keys (set intensity)
+        for (key, intensity) in [
+            (Key::Backtick, 0.0),
+            (Key::Num1, 0.1),
+            (Key::Num2, 0.2),
+            (Key::Num3, 0.3),
+            (Key::Num4, 0.4),
+            (Key::Num5, 0.5),
+            (Key::Num6, 0.6),
+            (Key::Num7, 0.7),
+            (Key::Num8, 0.8),
+            (Key::Num9, 0.9),
+            (Key::Num0, 1.0),
+        ] {
+            if ui.input(|i| i.key_pressed(key)) {
+                for node in mosaic_memory.selected.iter() {
+                    match props.node_props.get_mut(node).unwrap() {
+                        NodeProps::EffectNode(node_props) => {
+                            if let Some(i) = node_props.intensity.as_mut() {
+                                *i = intensity;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 
     mosaic_response
