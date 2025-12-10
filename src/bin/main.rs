@@ -25,7 +25,7 @@ use radiance::MovieNodeProps;
 use radiance::{
     ArcTextureViewSampler, AutoDJ, Context, EffectNodeProps, ImageNodeProps, InsertionPoint, Mir,
     MusicInfo, NodeId, NodeProps, ProjectionMappedOutputNodeProps, Props, RenderTarget,
-    RenderTargetId, ScreenOutputNodeProps,
+    RenderTargetId, ScreenOutputNodeProps, UiBgNodeProps, UiBgNodeState,
 };
 
 mod ui;
@@ -279,22 +279,7 @@ impl App<'_> {
                         "intensity": 1.0,
                     },
                     output_node_id.to_string(): {
-                        "type": "ProjectionMappedOutputNode",
-                        "resolution": [1000, 1000],
-                        "screens": [
-                            {
-                                "name": "HDMI-0",
-                                "resolution": [1920, 1080],
-                                "crop": [[0.2,0.8], [0.8,0.8], [0.8, 0.3], [0.5, 0.2], [0.2, 0.5]],
-                                "map": [1, 0.2, 0, -0.2, 1, 0, 0, 0, 1],
-                            },
-                            //{
-                            //    "name": "fake2",
-                            //    "resolution": [1920, 1080],
-                            //    "crop": [[0.2,0.8], [0.8,0.8], [0.8, 0.3], [0.5, 0.2], [0.2, 0.5]],
-                            //    "map": [1.5, 0.2, 0, -0.2, 1.5, 0, 0, 0, 1],
-                            //},
-                        ],
+                        "type": "UiBgNode",
                     }
                 },
                 "time": 0.,
@@ -582,12 +567,7 @@ impl App<'_> {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.2,
-                            g: 0.2,
-                            b: 0.2,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(from_srgb(26, 26, 26, 255)),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -600,18 +580,17 @@ impl App<'_> {
             // Draw the UI BG
             let mut bg_textures: Vec<_> = radiance_ui_bg_paint_results
                 .iter()
-                .filter_map(|(&node_id, texture)| Some((node_id, texture)))
+                .filter_map(|(&node_id, texture)| {
+                    self.ctx
+                        .node_states()
+                        .get(&node_id)
+                        .and_then(|node_state| <&UiBgNodeState>::try_from(node_state).ok())
+                        .map(|_ui_bg_node_state| (node_id, texture))
+                })
                 .collect();
             // Sort to maintain a stable superposition
             bg_textures.sort_by_key(|&(node_id, _)| node_id);
             for (_, texture) in bg_textures.into_iter() {
-                //if !self
-                //    .props
-                //    .get(node_id)
-                //    .is_some_and(|node_props| node_props.is_uibg)
-                //{
-                //    continue;
-                //}
                 let bg_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     layout: &self.bg_bind_group_layout,
                     entries: &[
@@ -883,20 +862,20 @@ impl App<'_> {
                                         .insert_node(new_node_id, &self.insertion_point);
                                 } else {
                                     match self.node_add_textedit.as_str() {
-                                        //"UiBg" => {
-                                        //    let new_node_id = NodeId::gen();
-                                        //    let new_node_props = NodeProps::UiBgNode(
-                                        //        UiBgNodeProps {
-                                        //            ..Default::default()
-                                        //        },
-                                        //    );
-                                        //    self.props
-                                        //        .node_props
-                                        //        .insert(new_node_id, new_node_props);
-                                        //    self.props
-                                        //        .graph
-                                        //        .insert_node(new_node_id, &self.insertion_point);
-                                        //}
+                                        "UiBg" => {
+                                            let new_node_id = NodeId::gen();
+                                            let new_node_props = NodeProps::UiBgNode(
+                                                UiBgNodeProps {
+                                                    ..Default::default()
+                                                },
+                                            );
+                                            self.props
+                                                .node_props
+                                                .insert(new_node_id, new_node_props);
+                                            self.props
+                                                .graph
+                                                .insert_node(new_node_id, &self.insertion_point);
+                                        }
                                         "ScreenOutput" => {
                                             let new_node_id = NodeId::gen();
                                             let new_node_props = NodeProps::ScreenOutputNode(
@@ -1159,5 +1138,23 @@ impl ApplicationHandler for App<'_> {
                 Instant::now() + Duration::from_secs_f64(1. / 60.),
             ));
         }
+    }
+}
+
+// From https://github.com/three-rs/three/blob/07e47da5e0673aa9a16526719e16debd59040eec/src/color.rs#L39
+fn from_srgb(r: u8, g: u8, b: u8, a: u8) -> wgpu::Color {
+    let f = |xu| {
+        let x = xu as f64 / 255.0;
+        if x > 0.04045 {
+            ((x + 0.055) / 1.055).powf(2.4)
+        } else {
+            x / 12.92
+        }
+    };
+    wgpu::Color {
+        r: f(r),
+        g: f(g),
+        b: f(b),
+        a: f(a),
     }
 }

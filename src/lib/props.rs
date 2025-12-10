@@ -7,6 +7,7 @@ use crate::movie_node::MovieNodeProps;
 use crate::placeholder_node::PlaceholderNodeProps;
 use crate::projection_mapped_output_node::ProjectionMappedOutputNodeProps;
 use crate::screen_output_node::ScreenOutputNodeProps;
+use crate::ui_bg_node::UiBgNodeProps;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -28,6 +29,7 @@ use std::collections::{HashMap, HashSet};
 pub enum NodeProps {
     EffectNode(EffectNodeProps),
     ScreenOutputNode(ScreenOutputNodeProps),
+    UiBgNode(UiBgNodeProps),
     ImageNode(ImageNodeProps),
     PlaceholderNode(PlaceholderNodeProps),
     #[cfg(feature = "mpv")]
@@ -45,6 +47,7 @@ impl From<&NodeProps> for CommonNodeProps {
         match props {
             NodeProps::EffectNode(p) => p.into(),
             NodeProps::ScreenOutputNode(p) => p.into(),
+            NodeProps::UiBgNode(p) => p.into(),
             NodeProps::ImageNode(p) => p.into(),
             NodeProps::PlaceholderNode(p) => p.into(),
             #[cfg(feature = "mpv")]

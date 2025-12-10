@@ -102,9 +102,9 @@ impl EffectNodeState {
 
         // Shader
         let source_name = format!("{name}.wgsl");
-        let effect_source = ctx
-            .fetch_library_content(&source_name)
-            .map_err(|_| format!("Failed to read effect shader file from library: \"{source_name}\""))?;
+        let effect_source = ctx.fetch_library_content(&source_name).map_err(|_| {
+            format!("Failed to read effect shader file from library: \"{source_name}\"")
+        })?;
 
         let (effect_sources_processed, shader_input_count, default_frequency) =
             preprocess_shader(&effect_source)?;

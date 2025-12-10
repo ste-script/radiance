@@ -11,6 +11,7 @@ use crate::ui::placeholder_node_tile::PlaceholderNodeTile;
 use crate::ui::projection_mapped_output_node_tile::ProjectionMappedOutputNodeTile;
 use crate::ui::screen_output_node_tile::ScreenOutputNodeTile;
 use crate::ui::tile::{Tile, TileId};
+use crate::ui::ui_bg_node_tile::UiBgNodeTile;
 use egui::{
     pos2, vec2, Id, IdMap, InnerResponse, Key, Modifiers, Pos2, Rect, Response, Sense, TextureId,
     Ui, Vec2, Widget,
@@ -168,6 +169,7 @@ impl LayoutCache {
                 let heights = match props {
                     NodeProps::EffectNode(p) => EffectNodeTile::min_input_heights(p),
                     NodeProps::ScreenOutputNode(p) => ScreenOutputNodeTile::min_input_heights(p),
+                    NodeProps::UiBgNode(p) => UiBgNodeTile::min_input_heights(p),
                     NodeProps::ImageNode(p) => ImageNodeTile::min_input_heights(p),
                     NodeProps::PlaceholderNode(p) => PlaceholderNodeTile::min_input_heights(p),
                     #[cfg(feature = "mpv")]
@@ -289,6 +291,7 @@ impl LayoutCache {
                     NodeProps::ScreenOutputNode(p) => {
                         ScreenOutputNodeTile::width_for_height(p, height)
                     }
+                    NodeProps::UiBgNode(p) => UiBgNodeTile::width_for_height(p, height),
                     NodeProps::ImageNode(p) => ImageNodeTile::width_for_height(p, height),
                     NodeProps::PlaceholderNode(p) => {
                         PlaceholderNodeTile::width_for_height(p, height)
@@ -966,6 +969,10 @@ where
             }
             NodeProps::ScreenOutputNode(p) => {
                 ScreenOutputNodeTile::new(p, node_state.try_into().unwrap(), preview_image)
+                    .add_contents(ui)
+            }
+            NodeProps::UiBgNode(p) => {
+                UiBgNodeTile::new(p, node_state.try_into().unwrap(), preview_image)
                     .add_contents(ui)
             }
             NodeProps::ImageNode(p) => {

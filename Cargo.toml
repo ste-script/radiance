@@ -35,9 +35,12 @@ itertools = "0.10"
 cpal = "0.16.0"
 winit = "0.30.12"
 wgpu = "27.0.1"
-egui = "0.33.2"
-egui-winit = "0.33.2"
-egui-wgpu = "0.33.2"
+egui = { git = "https://github.com/ervanalb/egui", rev = "c2560a2dcbb99bd0f16d67648b4c00f3aa3987c9" }
+egui-winit = { git = "https://github.com/ervanalb/egui", rev = "c2560a2dcbb99bd0f16d67648b4c00f3aa3987c9" }
+egui-wgpu = { git = "https://github.com/ervanalb/egui", rev = "c2560a2dcbb99bd0f16d67648b4c00f3aa3987c9" }
+#egui = "0.33.2"
+#egui-winit = "0.33.2"
+#egui-wgpu = "0.33.2"
 pollster = "0.4.0"
 derive_more = "0.99"
 image = "0.24"
@@ -49,6 +52,7 @@ libmpv-sys = { git = "git+https://github.com/ervanalb/libmpv-rs", rev="189f5e45d
 surfman = { version = "0.7.0", features = ["sm-x11"] }
 glow = "0.12.1"
 crossbeam = "0.8.2"
+
 
 # For memory profiling (see also src/bin/main.rs)
 #[dependencies.jemallocator]

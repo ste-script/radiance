@@ -11,6 +11,7 @@ mod projection_mapped_output_node_tile;
 mod screen_output_node_tile;
 mod spectrum_widget;
 mod tile;
+mod ui_bg_node_tile;
 mod waveform_widget;
 
 pub use beat_widget::*;

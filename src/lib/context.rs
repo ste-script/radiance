@@ -8,6 +8,7 @@ use crate::placeholder_node::PlaceholderNodeState;
 use crate::projection_mapped_output_node::ProjectionMappedOutputNodeState;
 use crate::render_target::{RenderTarget, RenderTargetId};
 use crate::screen_output_node::ScreenOutputNodeState;
+use crate::ui_bg_node::UiBgNodeState;
 use crate::{AudioLevels, Graph, NodeId, NodeProps, Props};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -122,6 +123,7 @@ pub struct RenderTargetState {
 pub enum NodeState {
     EffectNode(EffectNodeState),
     ScreenOutputNode(ScreenOutputNodeState),
+    UiBgNode(UiBgNodeState),
     ImageNode(ImageNodeState),
     PlaceholderNode(PlaceholderNodeState),
     #[cfg(feature = "mpv")]
@@ -284,6 +286,9 @@ impl Context {
             NodeProps::ScreenOutputNode(props) => {
                 NodeState::ScreenOutputNode(ScreenOutputNodeState::new(self, device, queue, props))
             }
+            NodeProps::UiBgNode(props) => {
+                NodeState::UiBgNode(UiBgNodeState::new(self, device, queue, props))
+            }
             NodeProps::ImageNode(props) => {
                 NodeState::ImageNode(ImageNodeState::new(self, device, queue, props))
             }
@@ -317,6 +322,10 @@ impl Context {
                 NodeProps::ScreenOutputNode(ref mut props) => {
                     state.update(self, device, queue, props)
                 }
+                _ => panic!("Type mismatch between props and state"),
+            },
+            NodeState::UiBgNode(ref mut state) => match node_props {
+                NodeProps::UiBgNode(ref mut props) => state.update(self, device, queue, props),
                 _ => panic!("Type mismatch between props and state"),
             },
             NodeState::ImageNode(ref mut state) => match node_props {
@@ -364,6 +373,14 @@ impl Context {
                 input_textures,
             ),
             NodeState::ScreenOutputNode(ref mut state) => state.paint(
+                self,
+                device,
+                queue,
+                encoder,
+                render_target_id,
+                input_textures,
+            ),
+            NodeState::UiBgNode(ref mut state) => state.paint(
                 self,
                 device,
                 queue,
