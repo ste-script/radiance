@@ -698,7 +698,7 @@ impl App<'_> {
                 },
                 |ui| {
                     egui::Frame::NONE
-                      .fill(egui::Color32::from_rgba_premultiplied(25, 25, 25, 250))
+                      .fill(egui::Color32::from_rgba_premultiplied(23, 23, 23, 230))
                       .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.set_min_width(ui.available_width());
