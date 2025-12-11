@@ -771,8 +771,12 @@ impl App<'_> {
                         if node_add_response.lost_focus() {
                             if app_ui.egui_ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
                                 let node_add_textedit_str = self.node_add_textedit.as_str();
-                                if node_add_textedit_str.starts_with("http:")
+                                if node_add_textedit_str.starts_with("file:")
+                                    || node_add_textedit_str.starts_with("http:")
                                     || node_add_textedit_str.starts_with("https:")
+                                    || node_add_textedit_str.starts_with("ytdl:")
+                                    || node_add_textedit_str.starts_with("lavf:")
+                                    || node_add_textedit_str.starts_with("av:")
                                     || node_add_textedit_str.ends_with(".mp4")
                                     || node_add_textedit_str.ends_with(".mkv")
                                     || node_add_textedit_str.ends_with(".avi")

@@ -12,19 +12,15 @@ use std::ffi;
 use std::mem::{transmute, transmute_copy};
 use std::string::String;
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::thread;
 
 surfman::declare_surfman!();
 
 const SHADER_SOURCE: &str = include_str!("image_shader.wgsl");
 
-fn get_proc_address(
-    ctx: &(Arc<surfman::Device>, Arc<surfman::Context>),
-    name: &str,
-) -> *mut ffi::c_void {
+fn get_proc_address(ctx: &(&surfman::Device, &surfman::Context), name: &str) -> *mut ffi::c_void {
     let (device, context) = ctx;
-    device.get_proc_address(&context, name) as *mut ffi::c_void
+    (*device).get_proc_address(&(*context), name) as *mut ffi::c_void
 }
 
 /// Properties of an MovieNode.
@@ -169,7 +165,23 @@ impl MovieNodeState {
         };
 
         // Spin up MPV thread
-        let file_path = ctx.fetch_library_path(name).to_string_lossy().to_string();
+        let file_path = if name.starts_with("file:")
+            || name.starts_with("http:")
+            || name.starts_with("https:")
+            || name.starts_with("ytdl:")
+            || name.starts_with("lavf:")
+            || name.starts_with("av:")
+        {
+            name.clone()
+        } else {
+            ctx.fetch_library_path(name).to_string_lossy().to_string()
+        };
+
+        let conf_file_path = ctx
+            .resource_dir
+            .join("mpv.conf")
+            .to_string_lossy()
+            .to_string();
 
         let (mpv_thread, mpv_tx, mpv_rx) = {
             // Variables that will be moved into thread:
@@ -201,11 +213,9 @@ impl MovieNodeState {
                     let gl_context_descriptor = gl_device
                         .create_context_descriptor(&gl_context_attributes)
                         .unwrap();
-                    let gl_context = gl_device
+                    let mut gl_context = gl_device
                         .create_context(&gl_context_descriptor, None)
                         .unwrap();
-                    let gl_device = Arc::new(gl_device);
-                    let gl_context = Arc::new(gl_context);
 
                     gl_device.make_context_current(&gl_context).unwrap();
 
@@ -233,7 +243,7 @@ impl MovieNodeState {
                         }
                         {
                             let opt = ffi::CString::new("msg-level").unwrap();
-                            let val = ffi::CString::new("all=v").unwrap();
+                            let val = ffi::CString::new("all=info").unwrap();
                             unsafe {
                                 libmpv_sys::mpv_set_option_string(
                                     transmute_copy(&mpv_init),
@@ -275,6 +285,33 @@ impl MovieNodeState {
                                 );
                             }
                         }
+                        // Look in the radiance resources folder for a mpv.conf file
+                        // that will be applied to all MovieNodes
+                        // (see https://mpv.io/manual/stable/#configuration-files)
+                        {
+                            let opt = ffi::CString::new("include").unwrap();
+                            let val = ffi::CString::new(conf_file_path).unwrap();
+                            unsafe {
+                                libmpv_sys::mpv_set_option_string(
+                                    transmute_copy(&mpv_init),
+                                    opt.as_ptr(),
+                                    val.as_ptr(),
+                                );
+                            }
+                        }
+                        // Look in the library folder for a mpv conf file
+                        // (see https://mpv.io/manual/stable/#file-specific-configuration-files)
+                        {
+                            let opt = ffi::CString::new("use-filedir-conf").unwrap();
+                            let val = ffi::CString::new("yes").unwrap();
+                            unsafe {
+                                libmpv_sys::mpv_set_option_string(
+                                    transmute_copy(&mpv_init),
+                                    opt.as_ptr(),
+                                    val.as_ptr(),
+                                );
+                            }
+                        }
                         Ok(())
                     })
                     .unwrap();
@@ -283,7 +320,7 @@ impl MovieNodeState {
                         RenderParam::ApiType(RenderParamApiType::OpenGl),
                         RenderParam::InitParams(OpenGLInitParams {
                             get_proc_address,
-                            ctx: (gl_device.clone(), gl_context.clone()),
+                            ctx: (&gl_device, &gl_context),
                         }),
                     ];
 
@@ -324,7 +361,9 @@ impl MovieNodeState {
                             let mut h: Option<u32> = None;
                             loop {
                                 let ev = ev_ctx.wait_event(10.);
-                                if ev.is_none() { continue; }
+                                if ev.is_none() {
+                                    continue;
+                                }
                                 match ev.unwrap() {
                                     Ok(Event::EndFile(r)) => {
                                         eprintln!("MPV Exiting. Reason: {:?}", r);
@@ -352,7 +391,9 @@ impl MovieNodeState {
                                     }) => {
                                         w = Some(new_w as u32);
                                         if let (Some(have_w), Some(have_h)) = (w, h) {
-                                            event_tx.send(MpvThreadEvent::Resize(have_w, have_h)).unwrap();
+                                            event_tx
+                                                .send(MpvThreadEvent::Resize(have_w, have_h))
+                                                .unwrap();
                                         }
                                     }
                                     Ok(Event::PropertyChange {
@@ -362,16 +403,20 @@ impl MovieNodeState {
                                     }) => {
                                         h = Some(new_h as u32);
                                         if let (Some(have_w), Some(have_h)) = (w, h) {
-                                            event_tx.send(MpvThreadEvent::Resize(have_w, have_h)).unwrap();
+                                            event_tx
+                                                .send(MpvThreadEvent::Resize(have_w, have_h))
+                                                .unwrap();
                                         }
                                     }
                                     Ok(Event::PlaybackRestart) => {
-                                            event_tx.send(MpvThreadEvent::Playing).unwrap();
+                                        event_tx.send(MpvThreadEvent::Playing).unwrap();
                                     }
-                                    Ok(e) => eprintln!("Event triggered: {:?}", e),
+                                    Ok(_) => {}
                                     Err(e) => {
                                         eprintln!("MPV Error: {:?}", e);
-                                        event_tx.send(MpvThreadEvent::Error(String::from("MPV Error"))).unwrap();
+                                        event_tx
+                                            .send(MpvThreadEvent::Error(String::from("MPV Error")))
+                                            .unwrap();
                                         event_tx.send(MpvThreadEvent::Terminate).unwrap();
                                         break;
                                     }
@@ -395,21 +440,23 @@ impl MovieNodeState {
                                             sample_count: 1,
                                             dimension: wgpu::TextureDimension::D2,
                                             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                                            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                                            usage: wgpu::TextureUsages::COPY_DST
+                                                | wgpu::TextureUsages::TEXTURE_BINDING,
                                             label: Some("image"),
                                             view_formats: &[wgpu::TextureFormat::Rgba8UnormSrgb],
                                         };
                                         let texture = device.create_texture(&texture_desc);
                                         let view = texture.create_view(&Default::default());
-                                        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-                                            address_mode_u: wgpu::AddressMode::ClampToEdge,
-                                            address_mode_v: wgpu::AddressMode::ClampToEdge,
-                                            address_mode_w: wgpu::AddressMode::ClampToEdge,
-                                            mag_filter: wgpu::FilterMode::Linear,
-                                            min_filter: wgpu::FilterMode::Linear,
-                                            mipmap_filter: wgpu::FilterMode::Linear,
-                                            ..Default::default()
-                                        });
+                                        let sampler =
+                                            device.create_sampler(&wgpu::SamplerDescriptor {
+                                                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                                                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                                                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                                                mag_filter: wgpu::FilterMode::Linear,
+                                                min_filter: wgpu::FilterMode::Linear,
+                                                mipmap_filter: wgpu::FilterMode::Linear,
+                                                ..Default::default()
+                                            });
                                         ArcTextureViewSampler::new(texture, view, sampler)
                                     };
 
@@ -462,7 +509,13 @@ impl MovieNodeState {
 
                                     let pixels = vec![0; (width * height * 4) as usize];
 
-                                    status_tx.send(MpvThreadStatusUpdate::Texture(wgpu_texture.clone(), width, height)).unwrap();
+                                    status_tx
+                                        .send(MpvThreadStatusUpdate::Texture(
+                                            wgpu_texture.clone(),
+                                            width,
+                                            height,
+                                        ))
+                                        .unwrap();
                                     frame_resources = Some(FrameResources {
                                         width,
                                         height,
@@ -476,7 +529,7 @@ impl MovieNodeState {
                                     if let Some(frame_resources) = frame_resources.as_mut() {
                                         // Tell MPV to render into our FBO
                                         render_context
-                                            .render::<(Arc<surfman::Device>, Arc<surfman::Context>)>(
+                                            .render::<(&surfman::Device, &surfman::Context)>(
                                                 unsafe { transmute(frame_resources.fbo) },
                                                 frame_resources.width as i32,
                                                 frame_resources.height as i32,
@@ -489,13 +542,18 @@ impl MovieNodeState {
 
                                         // Read pixels out of the corresponding OpenGL texture
                                         unsafe {
-                                            gl.bind_texture(glow::TEXTURE_2D, Some(frame_resources.ogl_texture));
+                                            gl.bind_texture(
+                                                glow::TEXTURE_2D,
+                                                Some(frame_resources.ogl_texture),
+                                            );
                                             gl.get_tex_image(
                                                 glow::TEXTURE_2D,
                                                 0,
                                                 glow::RGBA,
                                                 glow::UNSIGNED_BYTE,
-                                                glow::PixelPackData::Slice(&mut frame_resources.pixels),
+                                                glow::PixelPackData::Slice(
+                                                    &mut frame_resources.pixels,
+                                                ),
                                             );
                                             gl.bind_texture(glow::TEXTURE_2D, None);
                                         }
@@ -516,12 +574,8 @@ impl MovieNodeState {
                                             &frame_resources.pixels,
                                             wgpu::TexelCopyBufferLayout {
                                                 offset: 0,
-                                                bytes_per_row: Some(
-                                                    4 * frame_resources.width,
-                                                ),
-                                                rows_per_image: Some(
-                                                    frame_resources.height,
-                                                ),
+                                                bytes_per_row: Some(4 * frame_resources.width),
+                                                rows_per_image: Some(frame_resources.height),
                                             },
                                             frame_size,
                                         );
@@ -531,32 +585,64 @@ impl MovieNodeState {
                                     break;
                                 }
                                 MpvThreadEvent::Duration(d) => {
-                                    status_tx.send(MpvThreadStatusUpdate::Duration(d)).unwrap();
+                                    if let Err(e) =
+                                        status_tx.send(MpvThreadStatusUpdate::Duration(d))
+                                    {
+                                        println!("Failed to send Duration request: {e:?}");
+                                        break;
+                                    }
                                 }
                                 MpvThreadEvent::Position(p) => {
-                                    status_tx.send(MpvThreadStatusUpdate::Position(p)).unwrap();
+                                    if let Err(e) =
+                                        status_tx.send(MpvThreadStatusUpdate::Position(p))
+                                    {
+                                        println!("Failed to send Position request: {e:?}");
+                                        break;
+                                    }
                                 }
                                 MpvThreadEvent::Playing => {
-                                    status_tx.send(MpvThreadStatusUpdate::Playing).unwrap();
+                                    if let Err(e) = status_tx.send(MpvThreadStatusUpdate::Playing) {
+                                        println!("Failed to send Playing request: {e:?}");
+                                        break;
+                                    }
                                 }
                                 MpvThreadEvent::Error(e) => {
-                                    status_tx.send(MpvThreadStatusUpdate::Error(e)).unwrap();
+                                    if let Err(e) = status_tx.send(MpvThreadStatusUpdate::Error(e))
+                                    {
+                                        println!("Failed to send Error request: {e:?}");
+                                        break;
+                                    }
                                 }
                                 MpvThreadEvent::Mute(mute) => {
-                                    mpv.set_property("mute", mute).unwrap();
+                                    if let Err(e) = mpv.set_property("mute", mute) {
+                                        println!("Failed to set mute property: {e:?}");
+                                        break;
+                                    }
                                 }
                                 MpvThreadEvent::Pause(pause) => {
-                                    mpv.set_property("pause", pause).unwrap();
+                                    if let Err(e) = mpv.set_property("pause", pause) {
+                                        println!("Failed to set pause property: {e:?}");
+                                        break;
+                                    }
                                 }
                                 MpvThreadEvent::Seek(position) => {
                                     let position_str = format!("{}", position);
-                                    mpv.command("seek", &[&position_str, "absolute"]).unwrap();
+                                    if let Err(e) =
+                                        mpv.command("seek", &[&position_str, "absolute"])
+                                    {
+                                        println!("Failed to send seek command: {e:?}");
+                                        break;
+                                    }
                                 }
                             }
                         }
 
-                        mpv.command("quit", &[]).unwrap();
-                    }).unwrap();
+                        mpv.command("quit", &[]).unwrap_or_else(|e| {
+                            println!("Could not send MPV quit command: {e:?}");
+                        });
+                        gl_device.destroy_context(&mut gl_context).unwrap();
+                    })
+                    .unwrap();
                 }),
                 return_tx,
                 status_rx,
