@@ -1,4 +1,5 @@
 mod beat_widget;
+mod bg;
 mod drop_target;
 mod effect_node_tile;
 mod image_node_tile;
@@ -24,6 +25,7 @@ pub use mosaic::*;
 //pub use placeholder_node_tile::*;
 //pub use projection_mapped_output_node_tile::*;
 //pub use screen_output_node_tile::*;
+pub use bg::*;
 pub use spectrum_widget::*;
 pub use tile::*;
 pub use waveform_widget::*;

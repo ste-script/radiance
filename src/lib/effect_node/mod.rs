@@ -157,16 +157,10 @@ impl EffectNodeState {
         let shader_modules = shader_modules?;
 
         // The uniforms bind group:
-        // 0: Uniforms
-        // 1: iSampler
-        // 2: iInputsTex[]
-        // 3: iNoiseTex
-        // 4: iChannelsTex[]
-
         let bind_group_1_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0, // UpdateUniforms
+                    binding: 0, // Uniforms
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,

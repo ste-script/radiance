@@ -972,8 +972,7 @@ where
                     .add_contents(ui)
             }
             NodeProps::UiBgNode(p) => {
-                UiBgNodeTile::new(p, node_state.try_into().unwrap(), preview_image)
-                    .add_contents(ui)
+                UiBgNodeTile::new(p, node_state.try_into().unwrap(), preview_image).add_contents(ui)
             }
             NodeProps::ImageNode(p) => {
                 ImageNodeTile::new(p, node_state.try_into().unwrap(), preview_image)
@@ -1220,7 +1219,7 @@ where
         }
 
         // Handle number keys (set intensity)
-        for (key, intensity) in [
+        for (key, value) in [
             (Key::Backtick, 0.0),
             (Key::Num1, 0.1),
             (Key::Num2, 0.2),
@@ -1237,9 +1236,12 @@ where
                 for node in mosaic_memory.selected.iter() {
                     match props.node_props.get_mut(node).unwrap() {
                         NodeProps::EffectNode(node_props) => {
-                            if let Some(i) = node_props.intensity.as_mut() {
-                                *i = intensity;
+                            if let Some(intensity) = node_props.intensity.as_mut() {
+                                *intensity = value;
                             }
+                        }
+                        NodeProps::UiBgNode(node_props) => {
+                            node_props.opacity = value;
                         }
                         _ => {}
                     }

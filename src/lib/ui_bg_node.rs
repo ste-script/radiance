@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 
 /// Properties of a UiBgNode.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct UiBgNodeProps {}
+pub struct UiBgNodeProps {
+    #[serde(default)]
+    pub opacity: f32,
+}
 
 impl From<&UiBgNodeProps> for CommonNodeProps {
     fn from(_props: &UiBgNodeProps) -> Self {
@@ -15,7 +18,8 @@ impl From<&UiBgNodeProps> for CommonNodeProps {
     }
 }
 
-pub struct UiBgNodeState {}
+pub struct UiBgNodeState {
+}
 
 impl UiBgNodeState {
     pub fn new(

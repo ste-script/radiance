@@ -1,4 +1,4 @@
-use egui::{vec2, Align, Layout, TextureId, Ui};
+use egui::{vec2, Align, Layout, Slider, TextureId, Ui};
 use radiance::{UiBgNodeProps, UiBgNodeState};
 
 const PREVIEW_ASPECT_RATIO: f32 = 1.;
@@ -7,7 +7,7 @@ const NORMAL_WIDTH: f32 = 220.;
 
 pub struct UiBgNodeTile<'a> {
     preview_image: TextureId,
-    _props: &'a mut UiBgNodeProps,
+    opacity: &'a mut f32,
 }
 
 impl<'a> UiBgNodeTile<'a> {
@@ -33,7 +33,7 @@ impl<'a> UiBgNodeTile<'a> {
     ) -> Self {
         UiBgNodeTile {
             preview_image,
-            _props: props,
+            opacity: &mut props.opacity,
         }
     }
 
@@ -41,7 +41,7 @@ impl<'a> UiBgNodeTile<'a> {
     pub fn add_contents(self, ui: &mut Ui) {
         let UiBgNodeTile {
             preview_image,
-            _props,
+            opacity,
         } = self;
 
         ui.heading("UI BG");
@@ -49,6 +49,8 @@ impl<'a> UiBgNodeTile<'a> {
         ui.with_layout(
             Layout::bottom_up(Align::Center).with_cross_justify(true),
             |ui| {
+                ui.spacing_mut().slider_width = ui.available_width();
+                ui.add(Slider::new(opacity, 0.0..=1.0).show_value(false));
                 ui.centered_and_justified(|ui| {
                     let image_size = ui.available_size();
                     let image_size = (image_size * vec2(1., 1. / PREVIEW_ASPECT_RATIO)).min_elem()

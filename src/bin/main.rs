@@ -25,11 +25,11 @@ use radiance::MovieNodeProps;
 use radiance::{
     ArcTextureViewSampler, AutoDJ, Context, EffectNodeProps, ImageNodeProps, InsertionPoint, Mir,
     MusicInfo, NodeId, NodeProps, ProjectionMappedOutputNodeProps, Props, RenderTarget,
-    RenderTargetId, ScreenOutputNodeProps, UiBgNodeProps, UiBgNodeState,
+    RenderTargetId, ScreenOutputNodeProps, UiBgNodeProps,
 };
 
 mod ui;
-use ui::{modal, modal_shown, mosaic};
+use ui::{UiBg, modal, modal_shown, mosaic};
 use ui::{BeatWidget, SpectrumWidget, WaveformWidget};
 
 mod setup;
@@ -122,10 +122,6 @@ struct App<'a> {
     insertion_point: InsertionPoint,
     preview_images: HashMap<NodeId, egui::TextureId>,
     winit_output: WinitOutput<'a>,
-    bg_render_target: Option<(RenderTargetId, RenderTarget)>,
-    bg_shader_module: wgpu::ShaderModule,
-    bg_bind_group_layout: wgpu::BindGroupLayout,
-    bg_render_pipeline_layout: wgpu::PipelineLayout,
     app_ui: Option<AppUi>, // Stuff we can't make until we have a window
 }
 
@@ -139,8 +135,14 @@ struct AppUi {
     waveform_widget: WaveformWidget,
     spectrum_widget: SpectrumWidget,
     beat_widget: BeatWidget,
-    bg_render_pipeline: wgpu::RenderPipeline,
+    ui_bg: UiBg,
     can_draw: bool,
+}
+
+#[repr(C)]
+#[derive(Default, Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct BgUniforms {
+    opacity: f32,
 }
 
 impl App<'_> {
@@ -280,6 +282,7 @@ impl App<'_> {
                     },
                     output_node_id.to_string(): {
                         "type": "UiBgNode",
+                        "opacity": 0.3,
                     }
                 },
                 "time": 0.,
@@ -297,40 +300,6 @@ impl App<'_> {
         );
 
         let winit_output = WinitOutput::new(&device);
-
-        // Set up WGPU resources for drawing the UI BG
-        let bg_shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("BG output shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("bg.wgsl").into()),
-        });
-        let bg_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-                label: Some("bg bind group layout"),
-            });
-        let bg_render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("bg render pipeline layout"),
-                bind_group_layouts: &[&bg_bind_group_layout],
-                push_constant_ranges: &[],
-            });
 
         App {
             instance,
@@ -354,11 +323,7 @@ impl App<'_> {
             node_add_wants_focus: false,
             insertion_point: Default::default(),
             preview_images: Default::default(),
-            bg_render_target: None,
             winit_output,
-            bg_shader_module,
-            bg_bind_group_layout,
-            bg_render_pipeline_layout,
             app_ui: None,
         }
     }
@@ -376,25 +341,20 @@ impl App<'_> {
         // See if we need to (re-)create the UI BG render target
         if let Some(app_ui) = &mut self.app_ui {
             let wgpu::SurfaceConfiguration { width, height, .. } = app_ui.surface_config;
-            if !self
-                .bg_render_target
-                .as_ref()
-                .is_some_and(|(_, rt)| rt.width() == width && rt.height() == height)
-            {
-                self.bg_render_target = Some((
-                    RenderTargetId::gen(),
-                    RenderTarget::new(width, height, 1. / 60.),
-                ));
-            }
+            app_ui.ui_bg.maybe_resize(width, height);
         }
 
         // Merge our render list (preview + bg) and the winit_output render list:
         let (preview_id, preview_rt) = &self.preview_render_target;
         let preview = Some((preview_id, preview_rt));
-        let bg = self.bg_render_target.as_ref().map(|(id, rt)| (id, rt));
         let render_target_list = preview
             .into_iter()
-            .chain(bg.into_iter())
+            .chain(
+                self.app_ui
+                    .as_ref()
+                    .and_then(|app_ui| app_ui.ui_bg.render_target())
+                    .into_iter(),
+            )
             .chain(self.winit_output.render_targets_iter())
             .map(|(k, v)| (*k, v.clone()))
             .collect();
@@ -450,6 +410,7 @@ impl App<'_> {
             self.queue.submit(iter::once(encoder.finish()));
             results
         };
+
         // Paint the UI BG
         let radiance_ui_bg_paint_results = {
             let mut encoder = self
@@ -458,7 +419,11 @@ impl App<'_> {
                     label: Some("Encoder"),
                 });
 
-            if let Some((bg_render_target_id, _)) = self.bg_render_target {
+            if let Some((&bg_render_target_id, _)) = self
+                .app_ui
+                .as_ref()
+                .and_then(|app_ui| app_ui.ui_bg.render_target())
+            {
                 let results =
                     self.ctx
                         .paint(&self.device, &self.queue, &mut encoder, bg_render_target_id);
@@ -520,6 +485,10 @@ impl App<'_> {
             did_vsync = true;
         }
 
+        let bg_textures = app_ui
+            .ui_bg
+            .update(&mut self.props, &radiance_ui_bg_paint_results);
+
         // UI GPU update
         let tris = app_ui
             .egui_ctx
@@ -567,7 +536,7 @@ impl App<'_> {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(from_srgb(26, 26, 26, 255)),
+                        load: wgpu::LoadOp::Clear(from_srgb(25, 25, 25, 255)),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -577,39 +546,9 @@ impl App<'_> {
                 occlusion_query_set: None,
             });
 
-            // Draw the UI BG
-            let mut bg_textures: Vec<_> = radiance_ui_bg_paint_results
-                .iter()
-                .filter_map(|(&node_id, texture)| {
-                    self.ctx
-                        .node_states()
-                        .get(&node_id)
-                        .and_then(|node_state| <&UiBgNodeState>::try_from(node_state).ok())
-                        .map(|_ui_bg_node_state| (node_id, texture))
-                })
-                .collect();
-            // Sort to maintain a stable superposition
-            bg_textures.sort_by_key(|&(node_id, _)| node_id);
-            for (_, texture) in bg_textures.into_iter() {
-                let bg_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    layout: &self.bg_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&texture.view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&texture.sampler),
-                        },
-                    ],
-                    label: Some("bg bind group"),
-                });
-
-                render_pass.set_pipeline(&app_ui.bg_render_pipeline);
-                render_pass.set_bind_group(0, &bg_bind_group, &[]);
-                render_pass.draw(0..6, 0..1);
-            }
+            app_ui
+                .ui_bg
+                .render(&self.device, &mut render_pass, &bg_textures);
 
             // Draw EGUI
             app_ui.egui_renderer.render(
@@ -756,45 +695,50 @@ impl App<'_> {
                     builder
                 },
                 |ui| {
-                    ui.horizontal(|ui| {
-                        ui.image((self.waveform_texture.unwrap(), waveform_size));
-                        ui.image((self.spectrum_texture.unwrap(), spectrum_size));
-                        ui.image((self.beat_texture.unwrap(), beat_size));
-                        ui.checkbox(&mut self.auto_dj_1_enabled, "Auto DJ 1");
-                        ui.checkbox(&mut self.auto_dj_2_enabled, "Auto DJ 2");
+                    egui::Frame::NONE
+                      .fill(egui::Color32::from_rgba_premultiplied(25, 25, 25, 250))
+                      .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.image((self.waveform_texture.unwrap(), waveform_size));
+                            ui.image((self.spectrum_texture.unwrap(), spectrum_size));
+                            ui.image((self.beat_texture.unwrap(), beat_size));
+                            ui.checkbox(&mut self.auto_dj_1_enabled, "Auto DJ 1");
+                            ui.checkbox(&mut self.auto_dj_2_enabled, "Auto DJ 2");
 
-                        ui.label("Global timescale:");
-                        let timescales: &[f32] = &[0.125, 0.25, 0.5, 1., 2., 4., 8.];
-                        fn str_for_timescale(timescale: f32) -> String {
-                            if timescale < 1. {
-                                format!("{}x slower", 1. / timescale)
-                            } else if timescale == 1. {
-                                "1x".to_owned()
-                            } else if timescale > 1. {
-                                format!("{}x faster", timescale)
-                            } else {
-                                format!("{}", timescale)
-                            }
-                        }
-                        egui::ComboBox::from_id_salt("global timescale")
-                            .selected_text(str_for_timescale(self.mir.global_timescale).as_str())
-                            .show_ui(ui, |ui| {
-                                for &timescale in timescales.iter() {
-                                    ui.selectable_value(
-                                        &mut self.mir.global_timescale,
-                                        timescale,
-                                        str_for_timescale(timescale).as_str(),
-                                    );
+                            ui.label("Global timescale:");
+                            let timescales: &[f32] = &[0.125, 0.25, 0.5, 1., 2., 4., 8.];
+                            fn str_for_timescale(timescale: f32) -> String {
+                                if timescale < 1. {
+                                    format!("{}x slower", 1. / timescale)
+                                } else if timescale == 1. {
+                                    "1x".to_owned()
+                                } else if timescale > 1. {
+                                    format!("{}x faster", timescale)
+                                } else {
+                                    format!("{}", timescale)
                                 }
-                            });
-                        ui.label("Latency compensation:");
-                        ui.add(
-                            egui::DragValue::new(&mut self.mir.latency_compensation)
-                                .speed(0.001)
-                                .fixed_decimals(3)
-                                .suffix("s")
-                                .range(0. ..=1.),
-                        );
+                            }
+                            egui::ComboBox::from_id_salt("global timescale")
+                                .selected_text(str_for_timescale(self.mir.global_timescale).as_str())
+                                .show_ui(ui, |ui| {
+                                    for &timescale in timescales.iter() {
+                                        ui.selectable_value(
+                                            &mut self.mir.global_timescale,
+                                            timescale,
+                                            str_for_timescale(timescale).as_str(),
+                                        );
+                                    }
+                                });
+                            ui.label("Latency compensation:");
+                            ui.add(
+                                egui::DragValue::new(&mut self.mir.latency_compensation)
+                                    .speed(0.001)
+                                    .fixed_decimals(3)
+                                    .suffix("s")
+                                    .range(0. ..=1.),
+                            );
+                        });
                     });
 
                     let mosaic_response = ui.add(mosaic(
@@ -1016,46 +960,8 @@ impl AppUi {
         let spectrum_widget = SpectrumWidget::new(&app.device, pixels_per_point);
         let beat_widget = BeatWidget::new(&app.device, pixels_per_point);
 
-        // Make BG render pipeline
-        let bg_render_pipeline =
-            app.device
-                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("bg render pipeline"),
-                    layout: Some(&app.bg_render_pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &app.bg_shader_module,
-                        entry_point: Some("vs_main"),
-                        buffers: &[],
-                        compilation_options: Default::default(),
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &app.bg_shader_module,
-                        entry_point: Some("fs_main"),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: surface_format,
-                            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                        compilation_options: Default::default(),
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::TriangleStrip,
-                        strip_index_format: None,
-                        front_face: wgpu::FrontFace::Ccw,
-                        cull_mode: Some(wgpu::Face::Back),
-                        polygon_mode: wgpu::PolygonMode::Fill,
-                        unclipped_depth: false,
-                        conservative: false,
-                    },
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState {
-                        count: 1,
-                        mask: !0,
-                        alpha_to_coverage_enabled: false,
-                    },
-                    multiview: None,
-                    cache: None,
-                });
+        // Make BG
+        let ui_bg = UiBg::new(&app.device, surface_format);
 
         AppUi {
             window,
@@ -1067,7 +973,7 @@ impl AppUi {
             waveform_widget,
             spectrum_widget,
             beat_widget,
-            bg_render_pipeline,
+            ui_bg,
             can_draw: false,
         }
     }
