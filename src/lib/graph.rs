@@ -613,4 +613,40 @@ impl Graph {
             .cloned()
             .collect()
     }
+
+    /// Adds nodes from `new_nodes` to `selected` if they are surrounded by existing selected nodes
+    pub fn select_surrounded(&self, new_nodes: &[NodeId], selected: &mut HashSet<NodeId>) {
+        // TODO: this will not work if multiple connected new nodes
+        // are added in between existing selected nodes
+
+        let input_mapping = map_inputs(&self.nodes, &self.edges);
+        let output_mapping = map_outputs(&self.nodes, &self.edges);
+
+        for &target in new_nodes {
+            // See if any upstream node is selected
+            if !input_mapping
+                .get(&target)
+                .unwrap()
+                .iter()
+                .flatten()
+                .any(|&upstream_node| selected.contains(&upstream_node))
+            {
+                // No upstream nodes are selected
+                continue;
+            }
+
+            // See if any downstream node is selected
+            if !output_mapping
+                .get(&target)
+                .unwrap()
+                .iter()
+                .any(|&(downstream_node, _)| selected.contains(&downstream_node))
+            {
+                // Downstream node is not selected
+                continue;
+            }
+
+            selected.insert(target);
+        }
+    }
 }

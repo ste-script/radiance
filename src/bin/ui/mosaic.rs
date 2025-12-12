@@ -783,7 +783,29 @@ where
 
     if layout_cache_needs_refresh {
         props.graph.fix();
+
+        // Find the set of added nodes
+        let new_nodes: Vec<_> = mosaic_memory
+            .layout_cache
+            .as_ref()
+            .map(|cache| {
+                props
+                    .graph
+                    .nodes
+                    .iter()
+                    .filter(|node_id| !cache.graph.nodes.contains(node_id))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or(vec![]);
+
+        // Compute the layout
         mosaic_memory.layout_cache = Some(LayoutCache::from_props(props));
+
+        // Mark new nodes as selected if they have a selected node on both sides
+        props
+            .graph
+            .select_surrounded(&new_nodes, &mut mosaic_memory.selected);
 
         // Retain only selected / focused / dragged nodes that still exist in the graph
         let graph_nodes: HashSet<NodeId> = props.graph.nodes.iter().cloned().collect();
