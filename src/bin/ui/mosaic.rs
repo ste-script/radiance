@@ -579,9 +579,10 @@ fn selected_connected_component(
 #[derive(Debug, Default)]
 struct MosaicAnimationManager {
     tiles: IdMap<TileAnimation>,
+    container: Option<ContainerAnimation>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct TileAnimation {
     from_rect: Rect,
     to_rect: Rect,
@@ -595,6 +596,13 @@ struct TileAnimation {
     from_alpha: f32, // opacity, not to be confused with easing function parameter
     to_alpha: f32,
     toggle_time_alpha: f64,
+}
+
+#[derive(Debug)]
+struct ContainerAnimation {
+    from_size: Vec2,
+    to_size: Vec2,
+    toggle_time_size: f64,
 }
 
 fn ease(x: f32) -> f32 {
@@ -629,6 +637,30 @@ fn scalar_easing(time_since_toggle: f32, from_scalar: f32, to_scalar: f32) -> f3
 }
 
 impl MosaicAnimationManager {
+    pub fn animate_container(&mut self, time: f64, predicted_dt: f32, size: Vec2) -> Vec2 {
+        match &mut self.container {
+            None => {
+                self.container = Some(ContainerAnimation {
+                    from_size: size,
+                    to_size: size,
+                    toggle_time_size: -f64::INFINITY, // long time ago
+                });
+                size
+            }
+            Some(anim) => {
+                let time_since_toggle_size = (time - anim.toggle_time_size) as f32 + predicted_dt;
+                let current_size = vec_easing(time_since_toggle_size, anim.from_size, anim.to_size);
+
+                if anim.to_size != size {
+                    anim.from_size = current_size;
+                    anim.to_size = size;
+                    anim.toggle_time_size = time;
+                }
+                current_size
+            }
+        }
+    }
+
     pub fn animate_tile(
         &mut self,
         time: f64,
@@ -845,14 +877,22 @@ where
         drop_targets,
         ..
     } = &mosaic_memory.layout_cache.as_ref().unwrap();
+    let layout_size = *layout_size;
     let tiles = tiles.to_vec();
     let drop_targets = drop_targets.to_vec();
 
+    // Animate the container size
+    let (time, predicted_dt) = ui.input(|i| (i.time, i.predicted_dt));
+    let layout_size =
+        mosaic_memory
+            .animation_manager
+            .animate_container(time, predicted_dt, layout_size);
+
     // 100px top/bottom margin, 16px left/right margin
-    let container_size = ui.available_size().max(*layout_size + vec2(32., 200.));
+    let container_size = ui.available_size().max(layout_size + vec2(32., 200.));
     let (container_rect, mosaic_response) = ui.allocate_exact_size(container_size, Sense::click());
     let scrollarea_offset =
-        (container_rect.min - Pos2::ZERO) + 0.5 * (container_size - *layout_size);
+        (container_rect.min - Pos2::ZERO) + 0.5 * (container_size - layout_size);
 
     // Apply focus, selection, drag, and animation
 
@@ -934,7 +974,6 @@ where
                     .with_lifted(dragging)
                     .with_default_alpha()
                     .with_default_z();
-                let (time, predicted_dt) = ui.input(|i| (i.time, i.predicted_dt));
                 let tile = mosaic_memory.animation_manager.animate_tile(
                     time,
                     predicted_dt,
