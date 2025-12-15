@@ -677,7 +677,7 @@ impl App<'_> {
         let left_panel_response = egui::SidePanel::left("left").show_animated(
             &app_ui.egui_ctx,
             self.left_panel_expanded,
-            |ui| library::library_ui(ui, self.library_newly_opened),
+            |ui| library::library_ui(ui, &self.ctx, self.library_newly_opened),
         );
 
         let full_rect = app_ui.egui_ctx.available_rect();

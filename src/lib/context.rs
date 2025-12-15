@@ -591,6 +591,47 @@ impl Context {
         fs::read(self.fetch_library_path(filename))
     }
 
+    /// List all files in the library and builtin_library directories
+    /// Files are collected from builtin_library first, then library (so library files take precedence)
+    pub fn list_library_contents(&self) -> Vec<String> {
+        let mut files = Vec::new();
+
+        // Read from builtin_library directory first
+        let builtin_library_path = self.resource_dir.join("builtin_library");
+        if builtin_library_path.exists() && builtin_library_path.is_dir() {
+            if let Ok(entries) = fs::read_dir(builtin_library_path) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                            files.push(filename.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Read from library directory (takes precedence)
+        let library_path = self.resource_dir.join("library");
+        if library_path.exists() && library_path.is_dir() {
+            if let Ok(entries) = fs::read_dir(library_path) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                            // Only add if not already in the list (replaces builtin version)
+                            if !files.contains(&filename.to_string()) {
+                                files.push(filename.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        files
+    }
+
     /// Get all node states
     pub fn node_states(&self) -> &HashMap<NodeId, NodeState> {
         &self.node_states
