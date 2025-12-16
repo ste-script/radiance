@@ -78,7 +78,13 @@ impl ImageNodeState {
             .map_err(|_| format!("Failed to read image file from library: \"{name}\""))?;
 
         let image_obj = image::load_from_memory(&image_data).unwrap();
-        let image_rgba = image_obj.to_rgba8();
+        let mut image_rgba = image_obj.to_rgba8();
+        // Premultiply alpha
+        for c in image_rgba.chunks_mut(4) {
+            c[0] = (c[0] as u16 * c[3] as u16 / 255) as u8;
+            c[1] = (c[1] as u16 * c[3] as u16 / 255) as u8;
+            c[2] = (c[2] as u16 * c[3] as u16 / 255) as u8;
+        }
         let (image_width, image_height) = image_obj.dimensions();
         let image_size = wgpu::Extent3d {
             width: image_width,

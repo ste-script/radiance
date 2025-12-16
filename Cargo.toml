@@ -35,9 +35,9 @@ itertools = "0.10"
 cpal = "0.16.0"
 winit = "0.30.12"
 wgpu = "27.0.1"
-egui = { git = "https://github.com/ervanalb/egui", rev = "c2560a2dcbb99bd0f16d67648b4c00f3aa3987c9" }
-egui-winit = { git = "https://github.com/ervanalb/egui", rev = "c2560a2dcbb99bd0f16d67648b4c00f3aa3987c9" }
-egui-wgpu = { git = "https://github.com/ervanalb/egui", rev = "c2560a2dcbb99bd0f16d67648b4c00f3aa3987c9" }
+egui = { git = "https://github.com/ervanalb/egui", rev = "207bf8ad8708281fc4b14db49bdea152b228a38f" }
+egui-winit = { git = "https://github.com/ervanalb/egui", rev = "207bf8ad8708281fc4b14db49bdea152b228a38f" }
+egui-wgpu = { git = "https://github.com/ervanalb/egui", rev = "207bf8ad8708281fc4b14db49bdea152b228a38f" }
 #egui = "0.33.2"
 #egui-winit = "0.33.2"
 #egui-wgpu = "0.33.2"

@@ -38,6 +38,8 @@ use winit_output::WinitOutput;
 const AUTOSAVE_INTERVAL_FRAMES: usize = 60 * 10;
 const AUTOSAVE_FILENAME: &str = "autosave.json";
 
+const LOGO_SIZE: egui::Vec2 = egui::Vec2 { x: 56., y: 56. };
+
 fn autosave(resource_dir: &Path, props: &Props) {
     let inner = || {
         let contents = serde_json::to_string(props).map_err(|e| format!("{:?}", e))?;
@@ -128,6 +130,7 @@ struct AppUi {
     window: Arc<winit::window::Window>,
     surface_config: wgpu::SurfaceConfiguration,
     surface: wgpu::Surface<'static>,
+    logo_texture: egui::TextureHandle,
     waveform_widget: WaveformWidget,
     spectrum_widget: SpectrumWidget,
     beat_widget: BeatWidget,
@@ -720,7 +723,11 @@ impl App<'_> {
                 // Top bar
                 ui.scope_builder(
                     {
-                        let mut builder = egui::UiBuilder::default().max_rect(full_rect);
+                        let top_bar_rect = egui::Rect::from_min_size(
+                            full_rect.min,
+                            egui::vec2(full_rect.width(), 80.0),
+                        );
+                        let mut builder = egui::UiBuilder::default().max_rect(top_bar_rect);
                         builder.disabled = modal_shown;
                         builder
                     },
@@ -728,8 +735,14 @@ impl App<'_> {
                         egui::Frame::NONE
                             .fill(egui::Color32::from_rgba_premultiplied(25, 25, 25, 250))
                             .show(ui, |ui| {
-                                ui.horizontal(|ui| {
+                                ui.horizontal_centered(|ui| {
                                     ui.set_min_width(ui.available_width());
+                                    ui.add_space(5.0);
+                                    ui.add(
+                                        egui::Image::new((app_ui.logo_texture.id(), LOGO_SIZE))
+                                            .fit_to_exact_size(LOGO_SIZE),
+                                    );
+                                    ui.add_space(5.0);
                                     ui.image((self.waveform_texture.unwrap(), waveform_size));
                                     ui.image((self.spectrum_texture.unwrap(), spectrum_size));
                                     ui.image((self.beat_texture.unwrap(), beat_size));
@@ -913,6 +926,29 @@ impl AppUi {
         // Make BG
         let ui_bg = UiBg::new(&app.device, surface_format);
 
+        // Load logo
+        let logo_bytes = include_bytes!("../../library/logo.png");
+        let logo_image = image::load_from_memory(logo_bytes).unwrap();
+
+        let logo_pixel_size = LOGO_SIZE * pixels_per_point;
+        let logo_pixel_w = logo_pixel_size.x as u32;
+        let logo_pixel_h = logo_pixel_size.y as u32;
+        let logo_resized = image::imageops::resize(
+            &logo_image,
+            logo_pixel_w,
+            logo_pixel_h,
+            image::imageops::FilterType::Lanczos3,
+        );
+
+        let logo_texture = egui_ctx.load_texture(
+            "logo",
+            egui::ColorImage::from_rgba_unmultiplied(
+                [logo_pixel_w as usize, logo_pixel_h as usize],
+                &logo_resized,
+            ),
+            Default::default(),
+        );
+
         AppUi {
             window,
             surface_config,
@@ -924,6 +960,7 @@ impl AppUi {
             spectrum_widget,
             beat_widget,
             ui_bg,
+            logo_texture,
             can_draw: false,
         }
     }
