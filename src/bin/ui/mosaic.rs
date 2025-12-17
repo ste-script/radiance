@@ -1229,26 +1229,31 @@ where
     // Graph interactions
     if mosaic_response.has_focus() && !mosaic_memory.selected.is_empty() {
         // Handle scroll wheel
-        let value_delta = ui.input_mut(|i| {
-            let delta = i.smooth_scroll_delta.y + i.smooth_scroll_delta.x;
-            // Consume the scroll
-            i.smooth_scroll_delta.x = 0.;
-            i.smooth_scroll_delta.y = 0.;
-            delta
-        }) * INTENSITY_SCROLL_RATE;
-        if value_delta != 0. {
+        let (delta_x, delta_y) = ui.input(|i| (i.smooth_scroll_delta.x, i.smooth_scroll_delta.y));
+        if delta_x != 0. || delta_y != 0. {
+            let value_delta = (delta_y + delta_x) * INTENSITY_SCROLL_RATE;
+            let mut handled = false;
             for node in mosaic_memory.selected.iter() {
                 match props.node_props.get_mut(node).unwrap() {
                     NodeProps::EffectNode(EffectNodeProps { intensity, .. }) => {
                         intensity
                             .as_mut()
                             .map(|intensity| *intensity = (*intensity + value_delta).clamp(0., 1.));
+                        handled = true;
                     }
                     NodeProps::UiBgNode(UiBgNodeProps { opacity }) => {
                         *opacity = (*opacity + value_delta).clamp(0., 1.);
+                        handled = true;
                     }
                     _ => {}
                 }
+            }
+            if handled {
+                // Consume the scroll
+                ui.input_mut(|i| {
+                    i.smooth_scroll_delta.x = 0.;
+                    i.smooth_scroll_delta.y = 0.;
+                });
             }
         }
 
