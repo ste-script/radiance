@@ -100,13 +100,8 @@ impl Mir {
                 e
             )
         })?;
-        let supported_input_configs_str = supported_input_configs
-            .map(|c| format!("{:?}", c))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let config_range = device
-            .supported_input_configs()
-            .unwrap()
+
+        let config_range = supported_input_configs
             .filter(|config| {
                 (config.sample_format() == cpal::SampleFormat::I16
                     || config.sample_format() == cpal::SampleFormat::U16
@@ -126,6 +121,12 @@ impl Mir {
                 cpal::SupportedBufferSize::Unknown => 8192, // Large but not unreasonable
             })
             .ok_or_else(|| {
+                let supported_input_configs_str = device
+                    .supported_input_configs()
+                    .unwrap()
+                    .map(|c| format!("{:?}", c))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 format!(
                     "No supported audio input configs were found. Options were: {}",
                     supported_input_configs_str,

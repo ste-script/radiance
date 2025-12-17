@@ -224,7 +224,7 @@ jobs:
               <key>NSHighResolutionCapable</key>
               <true/>
               <key>NSMicrophoneUsageDescription</key>
-              <string>Radiance needs audio input for beat tracking and music-reactive visuals.</string>
+              <string>Radiance uses audio input for beat tracking and music-reactive visuals.</string>
           </dict>
           </plist>
           EOF
