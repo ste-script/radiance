@@ -29,6 +29,7 @@ const MOSAIC_ANIMATION_DURATION: f32 = 0.5;
 const INTENSITY_SCROLL_RATE: f32 = 0.002;
 const DROP_TARGET_WIDTH: f32 = 50.;
 const DROP_TARGET_DISPLACEMENT: f32 = 10.;
+const EXTRA_ROW_HEIGHT: f32 = 240.;
 
 /// A struct to hold info about a single tile that has been laid out.
 #[derive(Clone, Debug)]
@@ -369,10 +370,10 @@ impl LayoutCache {
                 my_input_heights.iter().zip(my_input_insertion_points)
             {
                 drop_targets.push(DropTargetInMosaic {
-                    drop_target: DropTarget::new(
-                        Rect::from_min_size(pos2(x, y), vec2(DROP_TARGET_WIDTH, input_height)),
-                        true, // XXX temporary for debugging, don't make active unless hovered
-                    ),
+                    drop_target: DropTarget::new(Rect::from_min_size(
+                        pos2(x, y),
+                        vec2(DROP_TARGET_WIDTH, input_height),
+                    )),
                     insertion_point: insertion_point.clone(),
                 });
                 y += input_height;
@@ -390,17 +391,32 @@ impl LayoutCache {
             let y = tile_y;
 
             drop_targets.push(DropTargetInMosaic {
-                drop_target: DropTarget::new(
-                    Rect::from_min_size(pos2(x, y), vec2(DROP_TARGET_WIDTH, height_full_size)),
-                    true, // XXX temporary for debugging, don't make active unless hovered
-                ),
+                drop_target: DropTarget::new(Rect::from_min_size(
+                    pos2(x, y),
+                    vec2(DROP_TARGET_WIDTH, height_full_size),
+                )),
                 insertion_point: insertion_point.clone(),
+            });
+        }
+
+        // Add an extra row on the bottom for a "disconnected" drop target
+        {
+            // Note: we will make this drop target larger than usual--
+            // square, with side length EXTRA_ROW_HEIGHT
+            let x = total_width - 0.5 * MARGIN - 0.5 * EXTRA_ROW_HEIGHT + DROP_TARGET_DISPLACEMENT;
+            let y = total_height;
+            drop_targets.push(DropTargetInMosaic {
+                drop_target: DropTarget::new(Rect::from_min_size(
+                    pos2(x, y),
+                    vec2(EXTRA_ROW_HEIGHT, EXTRA_ROW_HEIGHT),
+                )),
+                insertion_point: InsertionPoint::open(),
             });
         }
 
         Self {
             graph: props.graph.clone(),
-            size: vec2(total_width, total_height),
+            size: vec2(total_width, total_height + EXTRA_ROW_HEIGHT),
             tiles,
             drop_targets,
             start_tiles,

@@ -12,7 +12,7 @@ pub struct DropTarget {
 }
 
 impl DropTarget {
-    pub fn new(rect: Rect, _active: bool) -> Self {
+    pub fn new(rect: Rect) -> Self {
         Self { rect }
     }
 
