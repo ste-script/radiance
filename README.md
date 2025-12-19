@@ -26,8 +26,7 @@ Radiance is designed with live performance in mind. Patterns are easy to create 
 Project Status
 --------------
 
-Radiance has recently been completely rewritten in rust. The rewrite is not quite at feature-parity, and release builds is are not yet available.
-However, you are encouraged to try building radiance from source, and should fine that experience much improved.
+Radiance has recently been completely rewritten in rust. The rewrite is not quite at feature-parity, but you should find that the experience is much improved.
 
 ### Missing features from 0.6.1:
 * MIDI controller input
@@ -36,9 +35,7 @@ However, you are encouraged to try building radiance from source, and should fin
 Download
 --------
 
-You can download old releases (circa 2019) of Radiance for Linux or MacOS from the [releases](https://github.com/zbanks/radiance/releases) page.
-
-If you are having trouble with those, you are encouraged to try building from source, until a modern release is available--see the next section. I've only tried Linux but I see no reason why it wouldn't work on Windows or MacOS.
+You can download Radiance for Linux, Mac, or Windows from the [releases](https://github.com/zbanks/radiance/releases) page.
 
 Build
 -----
@@ -56,15 +53,16 @@ Build
 
 ### youtube-dl
 
-Radiance uses `libmpv` to load videos, which can optionally use `yt-dlp` to stream videos from YouTube and many other sites. Since `yt-dlp` updates frequently, we have avoided bundling it with Radiance. Instead, on Linux:
+Radiance uses `libmpv` to load videos, which can optionally use `yt-dlp` to stream videos from YouTube and many other sites. Since `yt-dlp` updates frequently, we have avoided bundling it with Radiance. Instead, on Linux or Windows:
 
-    sudo pip install yt-dlp
+    pip install yt-dlp
 
 or on Mac:
 
     brew install yt-dlp
 
-You can then load YouTube videos into Radiance by URL.
+Radiance will look for yt-dlp in your path. Try launching it from the command line to make sure it is found.
+Once set installed, you can then load YouTube videos into Radiance by URL.
 
 Mouse Control
 -------------
@@ -99,8 +97,10 @@ In addition, each shader has access to uniforms which are documented in [`librar
 
 Each shader must follow these properties:
 
-* The returned color set by each shader must be a valid, pre-multiplied alpha, RGBA tuple. Each component of the `vec4` must be in the range `[0.0, 1.0]`, and the RGB components must be less than or equal to the A component. (See `afixhighlight` for a shader that will highlight errors here in pink)
 * Identity: the shader must pass through its first input completely unchanged when `iIntensity == 0.` This means that inserting a new shader should not affect the output until its intensity is increased.
+* Continuity: a smooth change in intensity should produce a smooth change in behavior. There should be no sudden jumps in behavior as the slider is dragged.
+
+Additionally, the returned color must be a valid, pre-multiplied alpha, RGBA tuple. Each component of the `vec4` must be in the range `[0.0, 1.0]`, and the RGB components must be less than or equal to the A component. See `afixhighlight` for a shader that will highlight errors here in pink.
 
 ### Multi-buffer Shader Effects
 
@@ -111,5 +111,5 @@ An example that uses this feature is [`scramble.wgsl`](https://github.com/zbanks
 Copyright & License
 -------------------
 
-Released under the MIT/X11 License. Copyright 2016 Zach Banks and Eric Van Albert.
+Released under the MIT/X11 License. Copyright 2025 Zach Banks and Eric Van Albert.
 
