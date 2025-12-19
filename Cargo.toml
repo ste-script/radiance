@@ -1,12 +1,14 @@
 [package]
 name = "radiance"
 description = "Video art software designed for live performance"
-version = "0.1.0"
+version = "0.7.0"
 authors = ["Zach Banks <zjbanks@gmail.com>", "Eric Van Albert <eric@van.al>"]
 homepage = "https://radiance.video"
 repository = "https://github.com/zbanks/radiance"
 edition = "2021"
-license-file = "LICENSE"
+license = "MIT"
+keywords = ["video", "vj", "shader", "demoscene", "graphics"]
+categories = ["multimedia::video", "graphics", "visualization"]
 default-run = "radiance"
 
 [lib]
@@ -35,9 +37,9 @@ itertools = "0.10"
 cpal = "0.16.0"
 winit = "0.30.12"
 wgpu = "27.0.1"
-egui = { git = "https://github.com/ervanalb/egui", rev = "207bf8ad8708281fc4b14db49bdea152b228a38f" }
-egui-winit = { git = "https://github.com/ervanalb/egui", rev = "207bf8ad8708281fc4b14db49bdea152b228a38f" }
-egui-wgpu = { git = "https://github.com/ervanalb/egui", rev = "207bf8ad8708281fc4b14db49bdea152b228a38f" }
+egui = { version = "0.33.2", package = "radiance-egui" }
+egui-winit = { version = "0.33.2", package = "radiance-egui-winit" }
+egui-wgpu = { version = "0.33.2", package = "radiance-egui-wgpu" }
 #egui = "0.33.2"
 #egui-winit = "0.33.2"
 #egui-wgpu = "0.33.2"
@@ -47,8 +49,8 @@ image = "0.24"
 directories = "6.0.0"
 
 # mpv / MovieNode dependencies
-libmpv = { git = "https://github.com/ervanalb/libmpv-rs", rev = "189f5e45df40ec72cc9047e0b5ccb8b457b9735a", features = ["render"]}
-libmpv-sys = { git = "git+https://github.com/ervanalb/libmpv-rs", rev="189f5e45df40ec72cc9047e0b5ccb8b457b9735a"}
+libmpv = { version = "2.0.1", package = "radiance-libmpv", features = ["render"]}
+libmpv-sys = { version = "3.1.0", package = "radiance-libmpv-sys"}
 surfman = { version = "0.7.0", features = ["sm-x11"] }
 glow = "0.12.1"
 crossbeam = "0.8.2"
