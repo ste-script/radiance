@@ -95,6 +95,7 @@ jobs:
           cd /tmp
           wget https://imagemagick.org/archive/ImageMagick-7.1.2-11.tar.gz
           tar xzf ImageMagick-*.tar.gz
+          rm ImageMagick-*.tar.gz
           cd ImageMagick-*
           ./configure --prefix=/usr/local --with-modules --enable-shared
           make -j$(nproc)
