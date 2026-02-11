@@ -114,7 +114,7 @@ impl Mir {
                         }
                         cpal::SupportedBufferSize::Unknown => true,
                     }
-                    && (config.channels() == 1 || config.channels() == 2)
+                    && config.channels() >= 1
             })
             .min_by_key(|config| match *config.buffer_size() {
                 cpal::SupportedBufferSize::Range { min, .. } => MIN_USEFUL_BUFFER_SIZE.max(min),
@@ -210,7 +210,7 @@ impl Mir {
             if let Err(err) = sender.try_send(update.clone()) {
                 match err {
                     mpsc::TrySendError::Full(_) => {
-                        println!("MIR: buffer full; dropping update (polling too slow?)");
+                        // Expected when audio callbacks outpace UI polling; harmless
                     }
                     mpsc::TrySendError::Disconnected(_) => {
                         println!("MIR: main thread disconnected; dropping update");
@@ -221,24 +221,19 @@ impl Mir {
 
         let process_error = move |err| println!("MIR: audio stream error: {:?}", err);
 
-        let stream = match (config_range.sample_format(), config.channels) {
-            (cpal::SampleFormat::I16, 1) => device
-                .build_input_stream(
-                    &config,
-                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        process_audio_i16_mono(data);
-                    },
-                    process_error,
-                    None,
-                )
-                .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
-            (cpal::SampleFormat::I16, 2) => device
+        let channels = config.channels as usize;
+
+        let stream = match config_range.sample_format() {
+            cpal::SampleFormat::I16 => device
                 .build_input_stream(
                     &config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                         let data: Vec<i16> = data
-                            .chunks(2)
-                            .map(|pair| ((pair[0] as i32 + pair[1] as i32) / 2) as i16)
+                            .chunks(channels)
+                            .map(|frame| {
+                                let sum: i32 = frame.iter().map(|&s| s as i32).sum();
+                                (sum / channels as i32) as i16
+                            })
                             .collect();
                         process_audio_i16_mono(&data);
                     },
@@ -246,25 +241,16 @@ impl Mir {
                     None,
                 )
                 .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
-            (cpal::SampleFormat::U16, 1) => device
-                .build_input_stream(
-                    &config,
-                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                        let data: Vec<i16> =
-                            data.iter().map(|&x| ((x as i32) - 32768) as i16).collect();
-                        process_audio_i16_mono(&data);
-                    },
-                    process_error,
-                    None,
-                )
-                .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
-            (cpal::SampleFormat::U16, 2) => device
+            cpal::SampleFormat::U16 => device
                 .build_input_stream(
                     &config,
                     move |data: &[u16], _: &cpal::InputCallbackInfo| {
                         let data: Vec<i16> = data
-                            .chunks(2)
-                            .map(|pair| ((pair[0] as i32 + pair[1] as i32) / 2 - 32768) as i16)
+                            .chunks(channels)
+                            .map(|frame| {
+                                let sum: i32 = frame.iter().map(|&s| s as i32).sum();
+                                (sum / channels as i32 - 32768) as i16
+                            })
                             .collect();
                         process_audio_i16_mono(&data);
                     },
@@ -272,25 +258,16 @@ impl Mir {
                     None,
                 )
                 .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
-            (cpal::SampleFormat::F32, 1) => device
-                .build_input_stream(
-                    &config,
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        let data: Vec<i16> =
-                            data.iter().map(|&x| (x * 32767.) as i16).collect();
-                        process_audio_i16_mono(&data);
-                    },
-                    process_error,
-                    None,
-                )
-                .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
-            (cpal::SampleFormat::F32, 2) => device
+            cpal::SampleFormat::F32 => device
                 .build_input_stream(
                     &config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
                         let data: Vec<i16> = data
-                            .chunks(2)
-                            .map(|pair| ((pair[0] + pair[1]) * 0.5 * 32767.) as i16)
+                            .chunks(channels)
+                            .map(|frame| {
+                                let sum: f32 = frame.iter().sum();
+                                (sum / channels as f32 * 32767.) as i16
+                            })
                             .collect();
                         process_audio_i16_mono(&data);
                     },
@@ -298,8 +275,8 @@ impl Mir {
                     None,
                 )
                 .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
-            (s, c) => Err(format!(
-                "Unexpected sample format (s={s:?}, must be I16 or U16) or channel count (c={c:?}, must be 1 or 2)"
+            s => Err(format!(
+                "Unexpected sample format (s={s:?}, must be I16, U16, or F32)"
             )),
         }?;
 
