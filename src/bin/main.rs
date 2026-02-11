@@ -131,6 +131,8 @@ struct App<'a> {
     left_panel_expanded: bool,
     library_newly_opened: bool,
     insertion_point: InsertionPoint,
+    selected_device_name: String,
+    available_devices: Vec<String>,
     preview_images: HashMap<NodeId, egui::TextureId>,
     winit_output: WinitOutput<'a>,
     app_ui: Option<AppUi>, // Stuff we can't make until we have a window
@@ -333,6 +335,8 @@ impl App<'_> {
             left_panel_expanded: false,
             library_newly_opened: false,
             insertion_point: Default::default(),
+            selected_device_name: "Default".to_owned(),
+            available_devices: Mir::available_input_devices(),
             preview_images: Default::default(),
             winit_output,
             app_ui: None,
@@ -798,6 +802,35 @@ impl App<'_> {
                                             .suffix("s")
                                             .range(0. ..=1.),
                                     );
+                                    ui.label("Audio input:");
+                                    let prev_device = self.selected_device_name.clone();
+                                    let combo = egui::ComboBox::from_id_salt("audio input device")
+                                        .selected_text(self.selected_device_name.as_str())
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut self.selected_device_name,
+                                                "Default".to_owned(),
+                                                "Default",
+                                            );
+                                            for name in &self.available_devices {
+                                                ui.selectable_value(
+                                                    &mut self.selected_device_name,
+                                                    name.clone(),
+                                                    name.as_str(),
+                                                );
+                                            }
+                                        });
+                                    if combo.response.clicked() {
+                                        self.available_devices = Mir::available_input_devices();
+                                    }
+                                    if self.selected_device_name != prev_device {
+                                        let device = if self.selected_device_name == "Default" {
+                                            None
+                                        } else {
+                                            Some(self.selected_device_name.clone())
+                                        };
+                                        self.mir.switch_device(device);
+                                    }
                                 });
                             });
 

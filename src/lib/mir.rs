@@ -1,6 +1,6 @@
 pub use crate::beat_tracking::AudioLevels;
 use crate::beat_tracking::{BeatTracker, N_FILTERS, SAMPLE_RATE};
-use cpal::traits::DeviceTrait;
+use cpal::traits::{DeviceTrait, HostTrait};
 use std::sync::mpsc;
 use std::time;
 
@@ -31,6 +31,7 @@ pub struct Mir {
     last_update: Update,
     pub global_timescale: f32,
     pub latency_compensation: f32, // Anticipate beats by this many seconds
+    selected_device_name: Option<String>,
 }
 
 /// Updates sent over a queue
@@ -84,16 +85,32 @@ impl Default for Mir {
 }
 
 impl Mir {
-    fn audio_input(sender: mpsc::SyncSender<Update>) -> Result<cpal::Stream, String> {
-        use cpal::traits::{HostTrait, StreamTrait};
+    fn audio_input(
+        sender: mpsc::SyncSender<Update>,
+        device_name: Option<&str>,
+    ) -> Result<cpal::Stream, String> {
+        use cpal::traits::StreamTrait;
 
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or("No audio input devices found")?;
+        let device = match device_name {
+            Some(name) => host
+                .input_devices()
+                .map_err(|e| format!("Failed to enumerate input devices: {:?}", e))?
+                .find(|d| {
+                    d.description()
+                        .ok()
+                        .map(|desc| desc.name().to_string())
+                        .as_deref()
+                        == Some(name)
+                })
+                .ok_or_else(|| format!("Audio input device '{}' not found", name))?,
+            None => host
+                .default_input_device()
+                .ok_or("No audio input devices found")?,
+        };
 
         const MIN_USEFUL_BUFFER_SIZE: cpal::FrameCount = 256; // Lower actually would be useful, but CPAL lies about the min size, so this ought to be safe
-        const SAMPLE_RATE_CPAL: cpal::SampleRate = cpal::SampleRate(SAMPLE_RATE as u32);
+        const SAMPLE_RATE_CPAL: cpal::SampleRate = SAMPLE_RATE as u32;
         let supported_input_configs = device.supported_input_configs().map_err(|e| {
             format!(
                 "Could not query audio device for supported input configs: {:?}",
@@ -114,7 +131,7 @@ impl Mir {
                         }
                         cpal::SupportedBufferSize::Unknown => true,
                     }
-                    && (config.channels() == 1 || config.channels() == 2)
+                    && config.channels() >= 1
             })
             .min_by_key(|config| match *config.buffer_size() {
                 cpal::SupportedBufferSize::Range { min, .. } => MIN_USEFUL_BUFFER_SIZE.max(min),
@@ -210,7 +227,7 @@ impl Mir {
             if let Err(err) = sender.try_send(update.clone()) {
                 match err {
                     mpsc::TrySendError::Full(_) => {
-                        println!("MIR: buffer full; dropping update (polling too slow?)");
+                        // Expected when audio callbacks outpace UI polling; harmless
                     }
                     mpsc::TrySendError::Disconnected(_) => {
                         println!("MIR: main thread disconnected; dropping update");
@@ -221,24 +238,19 @@ impl Mir {
 
         let process_error = move |err| println!("MIR: audio stream error: {:?}", err);
 
-        let stream = match (config_range.sample_format(), config.channels) {
-            (cpal::SampleFormat::I16, 1) => device
-                .build_input_stream(
-                    &config,
-                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        process_audio_i16_mono(data);
-                    },
-                    process_error,
-                    None,
-                )
-                .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
-            (cpal::SampleFormat::I16, 2) => device
+        let channels = config.channels as usize;
+
+        let stream = match config_range.sample_format() {
+            cpal::SampleFormat::I16 => device
                 .build_input_stream(
                     &config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                         let data: Vec<i16> = data
-                            .chunks(2)
-                            .map(|pair| ((pair[0] as i32 + pair[1] as i32) / 2) as i16)
+                            .chunks(channels)
+                            .map(|frame| {
+                                let sum: i32 = frame.iter().map(|&s| s as i32).sum();
+                                (sum / channels as i32) as i16
+                            })
                             .collect();
                         process_audio_i16_mono(&data);
                     },
@@ -246,25 +258,16 @@ impl Mir {
                     None,
                 )
                 .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
-            (cpal::SampleFormat::U16, 1) => device
-                .build_input_stream(
-                    &config,
-                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                        let data: Vec<i16> =
-                            data.iter().map(|&x| ((x as i32) - 32768) as i16).collect();
-                        process_audio_i16_mono(&data);
-                    },
-                    process_error,
-                    None,
-                )
-                .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
-            (cpal::SampleFormat::U16, 2) => device
+            cpal::SampleFormat::U16 => device
                 .build_input_stream(
                     &config,
                     move |data: &[u16], _: &cpal::InputCallbackInfo| {
                         let data: Vec<i16> = data
-                            .chunks(2)
-                            .map(|pair| ((pair[0] as i32 + pair[1] as i32) / 2 - 32768) as i16)
+                            .chunks(channels)
+                            .map(|frame| {
+                                let sum: i32 = frame.iter().map(|&s| s as i32).sum();
+                                (sum / channels as i32 - 32768) as i16
+                            })
                             .collect();
                         process_audio_i16_mono(&data);
                     },
@@ -272,25 +275,16 @@ impl Mir {
                     None,
                 )
                 .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
-            (cpal::SampleFormat::F32, 1) => device
-                .build_input_stream(
-                    &config,
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        let data: Vec<i16> =
-                            data.iter().map(|&x| (x * 32767.) as i16).collect();
-                        process_audio_i16_mono(&data);
-                    },
-                    process_error,
-                    None,
-                )
-                .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
-            (cpal::SampleFormat::F32, 2) => device
+            cpal::SampleFormat::F32 => device
                 .build_input_stream(
                     &config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
                         let data: Vec<i16> = data
-                            .chunks(2)
-                            .map(|pair| ((pair[0] + pair[1]) * 0.5 * 32767.) as i16)
+                            .chunks(channels)
+                            .map(|frame| {
+                                let sum: f32 = frame.iter().sum();
+                                (sum / channels as f32 * 32767.) as i16
+                            })
                             .collect();
                         process_audio_i16_mono(&data);
                     },
@@ -298,8 +292,8 @@ impl Mir {
                     None,
                 )
                 .map_err(|e| format!("Failed to construct audio input stream: {:?}", e)),
-            (s, c) => Err(format!(
-                "Unexpected sample format (s={s:?}, must be I16 or U16) or channel count (c={c:?}, must be 1 or 2)"
+            s => Err(format!(
+                "Unexpected sample format (s={s:?}, must be I16, U16, or F32)"
             )),
         }?;
 
@@ -317,7 +311,7 @@ impl Mir {
         let (sender, receiver) = mpsc::sync_channel(MESSAGE_BUFFER_SIZE);
 
         // Set up system audio
-        let (stream, last_update) = match Self::audio_input(sender) {
+        let (stream, last_update) = match Self::audio_input(sender, None) {
             Ok(stream) => (
                 Some(stream),
                 Update {
@@ -353,6 +347,55 @@ impl Mir {
             last_update,
             global_timescale: 1.,
             latency_compensation: 0.1,
+            selected_device_name: None,
+        }
+    }
+
+    pub fn available_input_devices() -> Vec<String> {
+        let host = cpal::default_host();
+        match host.input_devices() {
+            Ok(devices) => devices
+                .filter_map(|d| d.description().ok().map(|desc| desc.name().to_string()))
+                .collect(),
+            Err(e) => {
+                println!("MIR: Failed to enumerate input devices: {:?}", e);
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn selected_device_name(&self) -> &str {
+        match &self.selected_device_name {
+            Some(name) => name.as_str(),
+            None => "Default",
+        }
+    }
+
+    pub fn switch_device(&mut self, device_name: Option<String>) {
+        self.selected_device_name = device_name;
+
+        // Drop the current stream
+        self._stream = None;
+
+        // Create a new channel and stream
+        const MESSAGE_BUFFER_SIZE: usize = 16;
+        let (sender, receiver) = mpsc::sync_channel(MESSAGE_BUFFER_SIZE);
+
+        match Self::audio_input(sender, self.selected_device_name.as_deref()) {
+            Ok(stream) => {
+                println!(
+                    "MIR: Switched to audio device: {}",
+                    self.selected_device_name()
+                );
+                self._stream = Some(stream);
+                self.receiver = receiver;
+            }
+            Err(e) => {
+                println!("MIR: Failed to switch audio device: {}", e);
+                println!("MIR: Proceeding with no audio input");
+                self._stream = None;
+                self.receiver = receiver;
+            }
         }
     }
 
