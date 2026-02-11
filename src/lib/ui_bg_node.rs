@@ -18,8 +18,7 @@ impl From<&UiBgNodeProps> for CommonNodeProps {
     }
 }
 
-pub struct UiBgNodeState {
-}
+pub struct UiBgNodeState {}
 
 impl UiBgNodeState {
     pub fn new(

@@ -41,6 +41,7 @@ fn node_type_index(props: &NodeProps) -> u8 {
     match props {
         NodeProps::EffectNode(_) => 0,
         NodeProps::ImageNode(_) => 1,
+        #[cfg(feature = "mpv")]
         NodeProps::MovieNode(_) => 2,
         NodeProps::UiBgNode(_) => 3,
         NodeProps::ScreenOutputNode(_) => 4,
@@ -257,15 +258,17 @@ fn filename_to_library_item(filename: &str) -> Option<LibraryItem> {
         // Video files
         #[cfg(feature = "mpv")]
         {
-            Some(LibraryItem {
+            return Some(LibraryItem {
                 name: filename.to_string(),
                 node_props: NodeProps::MovieNode(MovieNodeProps {
                     name: filename.to_string(),
                     ..MovieNodeProps::default()
                 }),
                 custom: false,
-            })
+            });
         }
+        #[allow(unreachable_code)]
+        None
     } else if filename.ends_with(".wgsl") {
         // Shader files (effect nodes) - strip the .wgsl extension
         let effect_name = filename.strip_suffix(".wgsl").unwrap();

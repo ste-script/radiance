@@ -93,7 +93,7 @@ impl Mir {
             .ok_or("No audio input devices found")?;
 
         const MIN_USEFUL_BUFFER_SIZE: cpal::FrameCount = 256; // Lower actually would be useful, but CPAL lies about the min size, so this ought to be safe
-        const SAMPLE_RATE_CPAL: cpal::SampleRate = cpal::SampleRate(SAMPLE_RATE as u32);
+        const SAMPLE_RATE_CPAL: cpal::SampleRate = SAMPLE_RATE as u32;
         let supported_input_configs = device.supported_input_configs().map_err(|e| {
             format!(
                 "Could not query audio device for supported input configs: {:?}",
