@@ -136,6 +136,7 @@ struct App<'a> {
     preview_images: HashMap<NodeId, egui::TextureId>,
     winit_output: WinitOutput<'a>,
     app_ui: Option<AppUi>, // Stuff we can't make until we have a window
+    _sleep_guard: Option<keepawake::KeepAwake>,
 }
 
 struct AppUi {
@@ -315,6 +316,15 @@ impl App<'_> {
 
         let winit_output = WinitOutput::new(&device);
 
+        let sleep_guard = keepawake::Builder::default()
+            .display(true)
+            .idle(true)
+            .reason("Radiance is rendering live visuals")
+            .app_name("Radiance")
+            .create()
+            .map_err(|e| println!("Failed to inhibit sleep: {}", e))
+            .ok();
+
         App {
             instance,
             adapter,
@@ -340,6 +350,7 @@ impl App<'_> {
             preview_images: Default::default(),
             winit_output,
             app_ui: None,
+            _sleep_guard: sleep_guard,
         }
     }
 

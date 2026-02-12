@@ -55,6 +55,7 @@ surfman = { version = "0.7.0", features = ["sm-x11"] }
 glow = "0.12.1"
 crossbeam = "0.8.2"
 open = "5.3.3"
+keepawake = "0.6.0"
 
 
 # For memory profiling (see also src/bin/main.rs)
