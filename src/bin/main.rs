@@ -882,6 +882,7 @@ struct App<'a> {
     last_preview_paint_results: HashMap<NodeId, ArcTextureViewSampler>,
     last_ui_bg_paint_results: HashMap<NodeId, ArcTextureViewSampler>,
     last_ui_bg_render_target_id: Option<RenderTargetId>,
+    fallback_preview_texture: ArcTextureViewSampler,
     preview_images: HashMap<NodeId, egui::TextureId>,
     winit_output: WinitOutput<'a>,
     perf_reporter: Option<PerfReporter>,
@@ -1075,6 +1076,50 @@ impl App<'_> {
             RenderTarget::new(256, 256, 1. / 60.),
         );
 
+        let fallback_preview_texture = {
+            let texture_size = wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            };
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Fallback preview texture"),
+                size: texture_size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &[0, 0, 0, 255],
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4),
+                    rows_per_image: Some(1),
+                },
+                texture_size,
+            );
+            let view = texture.create_view(&Default::default());
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
+            ArcTextureViewSampler::new(texture, view, sampler)
+        };
+
         let winit_output = WinitOutput::new(&device);
 
         let sleep_guard = keepawake::Builder::default()
@@ -1116,6 +1161,7 @@ impl App<'_> {
             last_preview_paint_results: HashMap::new(),
             last_ui_bg_paint_results: HashMap::new(),
             last_ui_bg_render_target_id: None,
+            fallback_preview_texture,
             preview_images: Default::default(),
             winit_output,
             perf_reporter: PerfReporter::from_env(),
@@ -1153,22 +1199,38 @@ impl App<'_> {
         &mut self,
         radiance_paint_results: &HashMap<NodeId, ArcTextureViewSampler>,
     ) {
+        let graph_nodes = self.props.graph.nodes.clone();
+        let preview_sources: Vec<_> = graph_nodes
+            .iter()
+            .map(|node_id| {
+                let texture = radiance_paint_results
+                    .get(node_id)
+                    .or_else(|| self.last_preview_paint_results.get(node_id))
+                    .unwrap_or(&self.fallback_preview_texture);
+                (*node_id, texture.view.clone())
+            })
+            .collect();
+        let stale_preview_nodes: Vec<_> = self
+            .preview_images
+            .keys()
+            .copied()
+            .filter(|node_id| !graph_nodes.contains(node_id))
+            .collect();
         let app_ui = self.app_ui.as_mut().unwrap();
 
-        for node_id in self.props.graph.nodes.iter() {
-            let native_texture = &radiance_paint_results.get(node_id).unwrap().view;
-            match self.preview_images.entry(*node_id) {
+        for (node_id, native_texture) in preview_sources {
+            match self.preview_images.entry(node_id) {
                 Entry::Vacant(e) => {
                     e.insert(app_ui.egui_renderer.register_native_texture(
                         &self.device,
-                        native_texture,
+                        native_texture.as_ref(),
                         wgpu::FilterMode::Linear,
                     ));
                 }
                 Entry::Occupied(e) => {
                     app_ui.egui_renderer.update_egui_texture_from_wgpu_texture(
                         &self.device,
-                        native_texture,
+                        native_texture.as_ref(),
                         wgpu::FilterMode::Linear,
                         *e.get(),
                     );
@@ -1176,9 +1238,9 @@ impl App<'_> {
             }
         }
 
-        for (node_id, egui_texture_id) in self.preview_images.iter() {
-            if !self.props.graph.nodes.contains(node_id) {
-                app_ui.egui_renderer.free_texture(egui_texture_id);
+        for node_id in stale_preview_nodes {
+            if let Some(egui_texture_id) = self.preview_images.remove(&node_id) {
+                app_ui.egui_renderer.free_texture(&egui_texture_id);
             }
         }
     }
@@ -1607,9 +1669,15 @@ impl App<'_> {
         let spectrum_size = egui::vec2(330., 75.);
         let beat_size = egui::vec2(75., 75.);
         {
-            for (node_id, egui_texture_id) in self.preview_images.iter() {
-                if !self.props.graph.nodes.contains(node_id) {
-                    app_ui.egui_renderer.free_texture(egui_texture_id);
+            let stale_preview_nodes: Vec<_> = self
+                .preview_images
+                .keys()
+                .copied()
+                .filter(|node_id| !self.props.graph.nodes.contains(node_id))
+                .collect();
+            for node_id in stale_preview_nodes {
+                if let Some(egui_texture_id) = self.preview_images.remove(&node_id) {
+                    app_ui.egui_renderer.free_texture(&egui_texture_id);
                 }
             }
 
