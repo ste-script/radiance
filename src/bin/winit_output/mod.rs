@@ -3,6 +3,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::iter;
 use std::sync::Arc;
+use std::time::Instant;
 /// This module handles radiance output through winit
 /// (e.g. actually displaying ScreenOutputNode to a screen)
 use winit;
@@ -308,7 +309,10 @@ impl WinitOutput<'_> {
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-    ) -> bool {
+    ) -> super::OutputUpdateStats {
+        let update_start = Instant::now();
+        let mut stats = super::OutputUpdateStats::default();
+
         // Prune screen_outputs and projection_mapped_outputs of any nodes that are no longer present in the given graph
         self.screen_outputs.retain(|id, _| {
             props
@@ -636,8 +640,6 @@ impl WinitOutput<'_> {
             }
         }
 
-        let mut did_vsync = false;
-
         // Paint each screen output
         for (node_id, screen_output) in self
             .screen_outputs
@@ -660,12 +662,16 @@ impl WinitOutput<'_> {
             }
 
             // Paint
+            let graph_paint_start = Instant::now();
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Radiance output encoder"),
             });
 
             let results = ctx.paint(device, queue, &mut encoder, screen_output.render_target_id);
             queue.submit(iter::once(encoder.finish()));
+            stats.graph_paints += 1;
+            stats.queue_submits += 1;
+            let _ = graph_paint_start.elapsed();
 
             // See if we can present (window is not occluded)
             // (on Mac, we can always draw.) XXX test this
@@ -676,6 +682,7 @@ impl WinitOutput<'_> {
             screen_output.can_draw = false;
             screen_output.window.request_redraw();
 
+            let surface_paint_start = Instant::now();
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Surface output encoder"),
             });
@@ -723,6 +730,7 @@ impl WinitOutput<'_> {
                         timestamp_writes: None,
                         occlusion_query_set: None,
                     });
+                    stats.surface_passes += 1;
 
                     render_pass.set_pipeline(&screen_output.render_pipeline);
                     render_pass.set_bind_group(0, &output_bind_group, &[]);
@@ -731,11 +739,14 @@ impl WinitOutput<'_> {
 
                 // Submit the commands.
                 queue.submit(iter::once(encoder.finish()));
+                stats.queue_submits += 1;
 
                 // Draw
                 screen_output.window.pre_present_notify();
                 output.present();
-                did_vsync = true;
+                stats.presented_windows += 1;
+                stats.did_vsync = true;
+                let _ = surface_paint_start.elapsed();
             }
         }
         // Paint each projection mapped output
@@ -749,12 +760,16 @@ impl WinitOutput<'_> {
             }
 
             // Paint virtual
+            let graph_paint_start = Instant::now();
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Radiance output encoder"),
             });
 
             let results = ctx.paint(device, queue, &mut encoder, output.render_target_id);
             queue.submit(iter::once(encoder.finish()));
+            stats.graph_paints += 1;
+            stats.queue_submits += 1;
+            let _ = graph_paint_start.elapsed();
 
             for (screen_name, single_output) in output.screens.iter_mut() {
                 // Fullscreen
@@ -807,6 +822,7 @@ impl WinitOutput<'_> {
                 single_output.window.request_redraw();
 
                 // Paint physical
+                let surface_paint_start = Instant::now();
                 let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Surface output encoder"),
                 });
@@ -859,6 +875,7 @@ impl WinitOutput<'_> {
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
+                        stats.surface_passes += 1;
 
                         render_pass.set_pipeline(&single_output.render_pipeline);
                         render_pass.set_bind_group(0, &output_bind_group, &[]);
@@ -872,10 +889,13 @@ impl WinitOutput<'_> {
 
                     // Submit the commands.
                     queue.submit(iter::once(encoder.finish()));
+                    stats.queue_submits += 1;
 
                     single_output.window.pre_present_notify();
                     output.present();
-                    did_vsync = true;
+                    stats.presented_windows += 1;
+                    stats.did_vsync = true;
+                    let _ = surface_paint_start.elapsed();
                 }
             }
         }
@@ -891,7 +911,8 @@ impl WinitOutput<'_> {
             projection_mapped_output.initial_update = true;
         }
 
-        did_vsync
+        stats.total = update_start.elapsed();
+        stats
     }
 
     fn new_screen_output(

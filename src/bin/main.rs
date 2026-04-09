@@ -43,8 +43,203 @@ const AUTOSAVE_FILENAME: &str = "autosave.json";
 const APP_SETTINGS_FILENAME: &str = "settings.json";
 const DEFAULT_AUDIO_INPUT_LABEL: &str = "Default input";
 const DEFAULT_SYSTEM_SOURCE_LABEL: &str = "System default source";
+const PERF_LOG_ENV: &str = "RADIANCE_PERF_LOG";
+const PERF_LOG_INTERVAL_ENV: &str = "RADIANCE_PERF_LOG_INTERVAL";
+const PERF_LOG_DEFAULT_INTERVAL_FRAMES: usize = 240;
 
 const LOGO_SIZE: egui::Vec2 = egui::Vec2 { x: 56., y: 56. };
+
+#[derive(Debug, Clone, Default)]
+struct FramePerformanceSample {
+    total: Duration,
+    mir_poll: Duration,
+    ctx_update: Duration,
+    autosave: Duration,
+    preview_paint: Duration,
+    ui_bg_paint: Duration,
+    ui_cpu: Duration,
+    output_update: Duration,
+    ui_gpu: Duration,
+    ui_present: Duration,
+    queue_submits: u32,
+    graph_paints: u32,
+    surface_passes: u32,
+    presented_windows: u32,
+    did_vsync: bool,
+}
+
+impl FramePerformanceSample {
+    fn absorb_output_update(&mut self, output: &OutputUpdateStats) {
+        self.output_update = output.total;
+        self.queue_submits += output.queue_submits;
+        self.graph_paints += output.graph_paints;
+        self.surface_passes += output.surface_passes;
+        self.presented_windows += output.presented_windows;
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct OutputUpdateStats {
+    total: Duration,
+    queue_submits: u32,
+    graph_paints: u32,
+    surface_passes: u32,
+    presented_windows: u32,
+    did_vsync: bool,
+}
+
+#[derive(Debug, Default)]
+struct PerfReporter {
+    report_every_frames: usize,
+    samples: Vec<FramePerformanceSample>,
+}
+
+impl PerfReporter {
+    fn from_env() -> Option<Self> {
+        if !env_var_truthy(PERF_LOG_ENV) {
+            return None;
+        }
+
+        let report_every_frames = env::var(PERF_LOG_INTERVAL_ENV)
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(PERF_LOG_DEFAULT_INTERVAL_FRAMES);
+
+        eprintln!(
+            "Radiance performance logging enabled; reporting every {} frames",
+            report_every_frames
+        );
+
+        Some(Self {
+            report_every_frames,
+            samples: Vec::with_capacity(report_every_frames),
+        })
+    }
+
+    fn push(&mut self, sample: FramePerformanceSample) {
+        self.samples.push(sample);
+        if self.samples.len() >= self.report_every_frames {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.samples.is_empty() {
+            return;
+        }
+
+        let avg_total_ms = avg_duration_ms(&self.samples, |sample| sample.total);
+        let p95_total_ms = percentile_duration_ms(&self.samples, |sample| sample.total, 0.95);
+        let max_total_ms = max_duration_ms(&self.samples, |sample| sample.total);
+        let avg_mir_ms = avg_duration_ms(&self.samples, |sample| sample.mir_poll);
+        let avg_ctx_update_ms = avg_duration_ms(&self.samples, |sample| sample.ctx_update);
+        let avg_autosave_ms = avg_duration_ms(&self.samples, |sample| sample.autosave);
+        let avg_preview_ms = avg_duration_ms(&self.samples, |sample| sample.preview_paint);
+        let avg_ui_bg_ms = avg_duration_ms(&self.samples, |sample| sample.ui_bg_paint);
+        let avg_ui_cpu_ms = avg_duration_ms(&self.samples, |sample| sample.ui_cpu);
+        let avg_output_ms = avg_duration_ms(&self.samples, |sample| sample.output_update);
+        let avg_ui_gpu_ms = avg_duration_ms(&self.samples, |sample| sample.ui_gpu);
+        let avg_ui_present_ms = avg_duration_ms(&self.samples, |sample| sample.ui_present);
+        let avg_queue_submits = avg_count(&self.samples, |sample| sample.queue_submits);
+        let avg_graph_paints = avg_count(&self.samples, |sample| sample.graph_paints);
+        let avg_surface_passes = avg_count(&self.samples, |sample| sample.surface_passes);
+        let avg_presented_windows = avg_count(&self.samples, |sample| sample.presented_windows);
+        let vsync_ratio = self
+            .samples
+            .iter()
+            .filter(|sample| sample.did_vsync)
+            .count() as f64
+            / self.samples.len() as f64;
+
+        eprintln!(
+            concat!(
+                "perf frames={} avg={:.2}ms p95={:.2}ms max={:.2}ms vsync={:.0}% ",
+                "| mir={:.2} update={:.2} autosave={:.2} preview={:.2} ui_bg={:.2} ",
+                "ui_cpu={:.2} outputs={:.2} ui_gpu={:.2} ui_present={:.2} ",
+                "| submits={:.1} graph_paints={:.1} surface_passes={:.1} windows={:.1}"
+            ),
+            self.samples.len(),
+            avg_total_ms,
+            p95_total_ms,
+            max_total_ms,
+            vsync_ratio * 100.0,
+            avg_mir_ms,
+            avg_ctx_update_ms,
+            avg_autosave_ms,
+            avg_preview_ms,
+            avg_ui_bg_ms,
+            avg_ui_cpu_ms,
+            avg_output_ms,
+            avg_ui_gpu_ms,
+            avg_ui_present_ms,
+            avg_queue_submits,
+            avg_graph_paints,
+            avg_surface_passes,
+            avg_presented_windows,
+        );
+
+        self.samples.clear();
+    }
+}
+
+fn env_var_truthy(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn avg_duration_ms<F>(samples: &[FramePerformanceSample], selector: F) -> f64
+where
+    F: Fn(&FramePerformanceSample) -> Duration,
+{
+    samples
+        .iter()
+        .map(|sample| selector(sample).as_secs_f64() * 1000.0)
+        .sum::<f64>()
+        / samples.len() as f64
+}
+
+fn max_duration_ms<F>(samples: &[FramePerformanceSample], selector: F) -> f64
+where
+    F: Fn(&FramePerformanceSample) -> Duration,
+{
+    samples
+        .iter()
+        .map(|sample| selector(sample).as_secs_f64() * 1000.0)
+        .fold(0.0, f64::max)
+}
+
+fn percentile_duration_ms<F>(samples: &[FramePerformanceSample], selector: F, percentile: f64) -> f64
+where
+    F: Fn(&FramePerformanceSample) -> Duration,
+{
+    let mut values: Vec<f64> = samples
+        .iter()
+        .map(|sample| selector(sample).as_secs_f64() * 1000.0)
+        .collect();
+    values.sort_by(|left, right| left.total_cmp(right));
+
+    let index = ((values.len().saturating_sub(1)) as f64 * percentile).round() as usize;
+    values[index]
+}
+
+fn avg_count<F>(samples: &[FramePerformanceSample], selector: F) -> f64
+where
+    F: Fn(&FramePerformanceSample) -> u32,
+{
+    samples
+        .iter()
+        .map(|sample| selector(sample) as f64)
+        .sum::<f64>()
+        / samples.len() as f64
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct AppSettings {
@@ -374,6 +569,7 @@ struct App<'a> {
     available_system_sources: Vec<SystemAudioSource>,
     preview_images: HashMap<NodeId, egui::TextureId>,
     winit_output: WinitOutput<'a>,
+    perf_reporter: Option<PerfReporter>,
     app_ui: Option<AppUi>, // Stuff we can't make until we have a window
     _sleep_guard: Option<keepawake::KeepAwake>,
 }
@@ -599,17 +795,36 @@ impl App<'_> {
             available_system_sources,
             preview_images: Default::default(),
             winit_output,
+            perf_reporter: PerfReporter::from_env(),
             app_ui: None,
             _sleep_guard: sleep_guard,
         }
     }
 
+    fn finish_frame(
+        &mut self,
+        frame_start: Instant,
+        mut sample: FramePerformanceSample,
+        did_vsync: bool,
+    ) -> bool {
+        sample.total = frame_start.elapsed();
+        sample.did_vsync = did_vsync;
+        if let Some(perf_reporter) = &mut self.perf_reporter {
+            perf_reporter.push(sample);
+        }
+        did_vsync
+    }
+
     // returns true if present() was called (forcing vsync)
     fn update(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        let frame_start = Instant::now();
         let mut did_vsync = false;
+        let mut perf_sample = FramePerformanceSample::default();
 
         // Update
+        let mir_poll_start = Instant::now();
         let music_info = self.mir.poll();
+        perf_sample.mir_poll = mir_poll_start.elapsed();
         self.props.time = music_info.time;
         self.props.dt = music_info.tempo * (1. / 60.);
         self.props.audio = music_info.audio.clone();
@@ -651,17 +866,21 @@ impl App<'_> {
             }
         });
 
+        let ctx_update_start = Instant::now();
         self.ctx.update(
             &self.device,
             &self.queue,
             &mut self.props,
             &render_target_list,
         );
+        perf_sample.ctx_update = ctx_update_start.elapsed();
 
         // Autosave if necessary
         // TODO: consider moving this to a background thread
         if self.autosave_timer == 0 {
+            let autosave_start = Instant::now();
             autosave(&self.ctx.resource_dir, &self.props);
+            perf_sample.autosave = autosave_start.elapsed();
             self.autosave_timer = AUTOSAVE_INTERVAL_FRAMES;
         } else {
             self.autosave_timer -= 1;
@@ -669,6 +888,7 @@ impl App<'_> {
 
         // Paint the previews
         let radiance_preview_paint_results = {
+            let preview_paint_start = Instant::now();
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -682,13 +902,17 @@ impl App<'_> {
                 &mut encoder,
                 preview_render_target_id,
             );
+            perf_sample.graph_paints += 1;
 
             self.queue.submit(iter::once(encoder.finish()));
+            perf_sample.queue_submits += 1;
+            perf_sample.preview_paint = preview_paint_start.elapsed();
             results
         };
 
         // Paint the UI BG
         let radiance_ui_bg_paint_results = {
+            let ui_bg_paint_start = Instant::now();
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -703,8 +927,11 @@ impl App<'_> {
                 let results =
                     self.ctx
                         .paint(&self.device, &self.queue, &mut encoder, bg_render_target_id);
+                perf_sample.graph_paints += 1;
 
                 self.queue.submit(iter::once(encoder.finish()));
+                perf_sample.queue_submits += 1;
+                perf_sample.ui_bg_paint = ui_bg_paint_start.elapsed();
                 results
             } else {
                 Default::default()
@@ -712,9 +939,10 @@ impl App<'_> {
         };
 
         // Run the UI
+        let ui_cpu_start = Instant::now();
         {
             let Some(app_ui) = &mut self.app_ui else {
-                return did_vsync;
+                return self.finish_frame(frame_start, perf_sample, did_vsync);
             };
             let raw_input = app_ui.egui_state.take_egui_input(&app_ui.window);
             app_ui.egui_ctx.begin_pass(raw_input);
@@ -727,6 +955,7 @@ impl App<'_> {
         app_ui
             .egui_state
             .handle_platform_output(&app_ui.window, full_output.platform_output);
+        perf_sample.ui_cpu = ui_cpu_start.elapsed();
 
         // Construct or destroy the AutoDJs
         match (self.auto_dj_1_enabled, &mut self.auto_dj_1) {
@@ -749,7 +978,7 @@ impl App<'_> {
         }
 
         // Update & paint other windows
-        if self.winit_output.update(
+        let output_update_stats = self.winit_output.update(
             event_loop,
             &mut self.ctx,
             &mut self.props,
@@ -757,10 +986,13 @@ impl App<'_> {
             &self.adapter,
             &self.device,
             &self.queue,
-        ) {
+        );
+        perf_sample.absorb_output_update(&output_update_stats);
+        if output_update_stats.did_vsync {
             did_vsync = true;
         }
 
+        let ui_gpu_start = Instant::now();
         app_ui.ui_bg.update(
             &self.device,
             &self.queue,
@@ -826,6 +1058,7 @@ impl App<'_> {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+            perf_sample.surface_passes += 1;
 
             // Draw background
             app_ui.ui_bg.render(&self.device, &mut render_pass);
@@ -838,14 +1071,19 @@ impl App<'_> {
             );
         }
         self.queue.submit(std::iter::once(encoder.finish()));
+        perf_sample.queue_submits += 1;
+        perf_sample.ui_gpu = ui_gpu_start.elapsed();
 
         for id in &full_output.textures_delta.free {
             app_ui.egui_renderer.free_texture(id);
         }
+        let ui_present_start = Instant::now();
         app_ui.window.pre_present_notify();
         output.present();
+        perf_sample.ui_present = ui_present_start.elapsed();
+        perf_sample.presented_windows += 1;
         did_vsync = true;
-        did_vsync
+        self.finish_frame(frame_start, perf_sample, did_vsync)
     }
 
     fn ui(

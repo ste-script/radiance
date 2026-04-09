@@ -55,9 +55,9 @@ pub struct EffectNodeStateReady {
     channel_count: u32,
 
     // GPU resources
-    bind_group_1_layout: wgpu::BindGroupLayout,
     bind_group_2_layout: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
+    uniform_bind_group: wgpu::BindGroup,
     sampler: wgpu::Sampler,
     render_pipelines: Vec<wgpu::RenderPipeline>,
 
@@ -66,8 +66,11 @@ pub struct EffectNodeStateReady {
 }
 
 struct EffectNodePaintState {
-    channel_textures: Vec<ArcTextureViewSampler>,
-    output_texture: ArcTextureViewSampler,
+    textures: Vec<ArcTextureViewSampler>,
+    phase: usize,
+    pass_output_indices: Vec<usize>,
+    cached_input_texture_ids: Vec<usize>,
+    bind_groups_2: Vec<wgpu::BindGroup>,
 }
 
 // The uniform buffer associated with the effect (agnostic to render target)
@@ -278,6 +281,14 @@ impl EffectNodeState {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &bind_group_1_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+            label: Some(&format!("EffectNode {} bind group 1 (uniforms)", name)),
+        });
 
         // The sampler that will be used for texture access within the shaders
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -297,13 +308,31 @@ impl EffectNodeState {
             input_count,
             intensity_integral: 0.,
             channel_count,
-            bind_group_1_layout,
             bind_group_2_layout,
             uniform_buffer,
+            uniform_bind_group,
             sampler,
             render_pipelines,
             paint_states: HashMap::new(),
         })
+    }
+
+    fn build_pass_output_indices(texture_count: usize) -> Vec<usize> {
+        let channel_count = texture_count - 1;
+        let mut pass_output_indices = Vec::with_capacity(texture_count * channel_count);
+
+        for phase in 0..texture_count {
+            let mut slot_order: Vec<usize> = (0..texture_count)
+                .map(|offset| (phase + offset) % texture_count)
+                .collect();
+
+            for channel in (0..channel_count).rev() {
+                pass_output_indices.push(slot_order[channel_count]);
+                slot_order.swap(channel, channel_count);
+            }
+        }
+
+        pass_output_indices
     }
 
     fn new_paint_state(
@@ -345,15 +374,99 @@ impl EffectNodeState {
             ArcTextureViewSampler::new(texture, view, sampler)
         };
 
-        let output_texture = make_texture();
-
-        let channel_textures: Vec<ArcTextureViewSampler> = (0..self_ready.channel_count)
+        let texture_count = self_ready.channel_count as usize + 1;
+        let textures: Vec<ArcTextureViewSampler> = (0..texture_count)
             .map(|_| make_texture())
             .collect();
 
         EffectNodePaintState {
-            channel_textures,
-            output_texture,
+            textures,
+            phase: 0,
+            pass_output_indices: Self::build_pass_output_indices(texture_count),
+            cached_input_texture_ids: Vec::new(),
+            bind_groups_2: Vec::new(),
+        }
+    }
+
+    fn update_bind_group_2_cache(
+        bind_group_2_layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        input_count: usize,
+        channel_count: usize,
+        ctx: &Context,
+        device: &wgpu::Device,
+        render_target_state: &RenderTargetState,
+        paint_state: &mut EffectNodePaintState,
+        inputs: &[Option<ArcTextureViewSampler>],
+    ) {
+        let input_textures: Vec<&ArcTextureViewSampler> = (0..input_count)
+            .map(|index| match inputs.get(index) {
+                Some(Some(texture)) => texture,
+                _ => ctx.blank_texture(),
+            })
+            .collect();
+        let input_texture_ids: Vec<usize> = input_textures
+            .iter()
+            .map(|texture| std::sync::Arc::as_ptr(&texture.view) as usize)
+            .collect();
+
+        if input_texture_ids == paint_state.cached_input_texture_ids
+            && !paint_state.bind_groups_2.is_empty()
+        {
+            return;
+        }
+
+        paint_state.cached_input_texture_ids = input_texture_ids;
+        paint_state.bind_groups_2.clear();
+
+        let input_binding: Vec<&wgpu::TextureView> = input_textures
+            .iter()
+            .map(|texture| texture.view.as_ref())
+            .collect();
+        let texture_count = paint_state.textures.len();
+        paint_state
+            .bind_groups_2
+            .reserve(texture_count * channel_count);
+
+        for phase in 0..texture_count {
+            let mut slot_order: Vec<usize> = (0..texture_count)
+                .map(|offset| (phase + offset) % texture_count)
+                .collect();
+
+            for channel in (0..channel_count).rev() {
+                let channels: Vec<&wgpu::TextureView> = slot_order[..channel_count]
+                    .iter()
+                    .map(|&index| paint_state.textures[index].view.as_ref())
+                    .collect();
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: bind_group_2_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Sampler(sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureViewArray(
+                                input_binding.as_slice(),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(
+                                &render_target_state.noise_texture().view,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureViewArray(channels.as_slice()),
+                        },
+                    ],
+                    label: Some("EffectNode bind group 2 (textures)"),
+                });
+                paint_state.bind_groups_2.push(bind_group);
+                slot_order.swap(channel, channel_count);
+            }
         }
     }
 
@@ -469,6 +582,12 @@ impl EffectNodeState {
                 let render_target_state = ctx
                     .render_target_state(render_target_id)
                     .expect("Call to paint() with a render target ID unknown to the context");
+                let bind_group_2_layout = &self_ready.bind_group_2_layout;
+                let sampler = &self_ready.sampler;
+                let input_count = self_ready.input_count as usize;
+                let channel_count = self_ready.channel_count as usize;
+                let render_pipelines = &self_ready.render_pipelines;
+                let uniform_bind_group = &self_ready.uniform_bind_group;
                 let paint_state = self_ready.paint_states.get_mut(&render_target_id).expect("Call to paint() with a render target ID unknown to the node (did you call update() first?)");
 
                 // Populate the uniforms
@@ -497,66 +616,31 @@ impl EffectNodeState {
                     );
                 }
 
-                // Make an array of input textures
-                let input_binding: Vec<&wgpu::TextureView> = (0..self_ready.input_count)
-                    .map(|i| match inputs.get(i as usize) {
-                        Some(Some(tex)) => tex.view.as_ref(),
-                        _ => ctx.blank_texture().view.as_ref(),
-                    })
-                    .collect();
+                Self::update_bind_group_2_cache(
+                    bind_group_2_layout,
+                    sampler,
+                    input_count,
+                    channel_count,
+                    ctx,
+                    device,
+                    render_target_state,
+                    paint_state,
+                    inputs,
+                );
 
                 // Render all channels in reverse order
-                for channel in (0..self_ready.channel_count).rev() {
-                    // Assemble the "channels" texture array binding
-                    let channels: Vec<&wgpu::TextureView> = paint_state
-                        .channel_textures
-                        .iter()
-                        .map(|t| t.view.as_ref())
-                        .collect();
-
-                    let bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        layout: &self_ready.bind_group_1_layout,
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: self_ready.uniform_buffer.as_entire_binding(),
-                        }],
-                        label: Some("EffectNode bind group 1 (uniforms)"),
-                    });
-                    let bind_group_2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        layout: &self_ready.bind_group_2_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0, // iSampler
-                                resource: wgpu::BindingResource::Sampler(&self_ready.sampler),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1, // iInputsTex
-                                resource: wgpu::BindingResource::TextureViewArray(
-                                    input_binding.as_slice(),
-                                ),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2, // iNoiseTex
-                                resource: wgpu::BindingResource::TextureView(
-                                    &render_target_state.noise_texture().view,
-                                ),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 3, // iChannelsTex
-                                resource: wgpu::BindingResource::TextureViewArray(
-                                    channels.as_slice(),
-                                ),
-                            },
-                        ],
-                        label: Some("EffectNode bind group 2 (textures)"),
-                    });
+                let phase = paint_state.phase;
+                for (pass_index, channel) in (0..channel_count).rev().enumerate() {
+                    let bind_group_2_index = phase * channel_count + pass_index;
+                    let output_texture_index = paint_state.pass_output_indices[bind_group_2_index];
+                    let bind_group_2 = &paint_state.bind_groups_2[bind_group_2_index];
 
                     {
                         let mut render_pass =
                             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                 label: Some("EffectNode render pass"),
                                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: paint_state.output_texture.view.as_ref(),
+                                    view: paint_state.textures[output_texture_index].view.as_ref(),
                                     resolve_target: None,
                                     ops: wgpu::Operations {
                                         load: wgpu::LoadOp::Load,
@@ -569,21 +653,15 @@ impl EffectNodeState {
                                 occlusion_query_set: None,
                             });
 
-                        render_pass.set_pipeline(&self_ready.render_pipelines[channel as usize]);
-                        render_pass.set_bind_group(0, &bind_group_1, &[]);
-                        render_pass.set_bind_group(1, &bind_group_2, &[]);
+                        render_pass.set_pipeline(&render_pipelines[channel]);
+                        render_pass.set_bind_group(0, uniform_bind_group, &[]);
+                        render_pass.set_bind_group(1, bind_group_2, &[]);
                         render_pass.draw(0..4, 0..1);
                     }
-
-                    // Swap buffers: move the output texture we just rendered
-                    // into its proper slot in the channel_textures array
-                    std::mem::swap(
-                        &mut paint_state.channel_textures[channel as usize],
-                        &mut paint_state.output_texture,
-                    );
                 }
 
-                paint_state.channel_textures[0].clone()
+                paint_state.phase = (paint_state.phase + 1) % paint_state.textures.len();
+                paint_state.textures[paint_state.phase].clone()
             }
             _ => inputs
                 .first()
