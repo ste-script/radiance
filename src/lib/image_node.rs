@@ -52,6 +52,8 @@ pub struct ImageNodeStateReady {
 
 struct ImageNodePaintState {
     output_texture: ArcTextureViewSampler,
+    cached_input_texture_id: Option<usize>,
+    bind_group: Option<wgpu::BindGroup>,
 }
 
 #[repr(C)]
@@ -313,7 +315,50 @@ impl ImageNodeState {
 
         let output_texture = make_texture();
 
-        ImageNodePaintState { output_texture }
+        ImageNodePaintState {
+            output_texture,
+            cached_input_texture_id: None,
+            bind_group: None,
+        }
+    }
+
+    fn update_bind_group_cache(
+        bind_group_layout: &wgpu::BindGroupLayout,
+        uniform_buffer: &wgpu::Buffer,
+        sampler: &wgpu::Sampler,
+        image_texture: &ArcTextureViewSampler,
+        device: &wgpu::Device,
+        paint_state: &mut ImageNodePaintState,
+        input_texture: &ArcTextureViewSampler,
+    ) {
+        let input_texture_id = std::sync::Arc::as_ptr(&input_texture.view) as usize;
+        if paint_state.cached_input_texture_id == Some(input_texture_id) && paint_state.bind_group.is_some() {
+            return;
+        }
+
+        paint_state.cached_input_texture_id = Some(input_texture_id);
+        paint_state.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&input_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&image_texture.view),
+                },
+            ],
+            label: Some("ImageNode bind group"),
+        }));
     }
 
     fn update_paint_states(
@@ -400,6 +445,11 @@ impl ImageNodeState {
     ) -> ArcTextureViewSampler {
         match self {
             ImageNodeState::Ready(self_ready) => {
+                let bind_group_layout = &self_ready.bind_group_layout;
+                let uniform_buffer = &self_ready.uniform_buffer;
+                let sampler = &self_ready.sampler;
+                let image_texture_ref = &self_ready.image_texture;
+                let render_pipeline = &self_ready.render_pipeline;
                 let paint_state = self_ready.paint_states.get_mut(&render_target_id).expect("Call to paint() with a render target ID unknown to the node (did you call update() first?)");
 
                 let render_target_state = ctx
@@ -436,30 +486,16 @@ impl ImageNodeState {
                     ctx.blank_texture()
                 };
 
-                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    layout: &self_ready.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: self_ready.uniform_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self_ready.sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2, // iInputTex
-                            resource: wgpu::BindingResource::TextureView(&input_texture.view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3, // iImageTex
-                            resource: wgpu::BindingResource::TextureView(
-                                &self_ready.image_texture.view,
-                            ),
-                        },
-                    ],
-                    label: Some("ImageNode bind group"),
-                });
+                Self::update_bind_group_cache(
+                    bind_group_layout,
+                    uniform_buffer,
+                    sampler,
+                    image_texture_ref,
+                    device,
+                    paint_state,
+                    input_texture,
+                );
+                let bind_group = paint_state.bind_group.as_ref().unwrap();
 
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -478,8 +514,8 @@ impl ImageNodeState {
                         occlusion_query_set: None,
                     });
 
-                    render_pass.set_pipeline(&self_ready.render_pipeline);
-                    render_pass.set_bind_group(0, &bind_group, &[]);
+                    render_pass.set_pipeline(render_pipeline);
+                    render_pass.set_bind_group(0, bind_group, &[]);
                     render_pass.draw(0..4, 0..1);
                 }
 

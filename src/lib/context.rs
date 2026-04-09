@@ -105,6 +105,10 @@ pub struct Context {
     // State of individual render targets and nodes
     render_target_states: HashMap<RenderTargetId, RenderTargetState>,
     node_states: HashMap<NodeId, NodeState>,
+
+    // Scratch storage reused across frames to reduce traversal allocations.
+    node_ids_scratch: Vec<NodeId>,
+    input_textures_scratch: Vec<Option<ArcTextureViewSampler>>,
 }
 
 /// Internal state and resources that is associated with a specific RenderTarget,
@@ -251,6 +255,8 @@ impl Context {
             graph_input_mapping: Default::default(),
             render_target_states: Default::default(),
             node_states: Default::default(),
+            node_ids_scratch: Vec::new(),
+            input_textures_scratch: Vec::new(),
         }
     }
 
@@ -501,11 +507,14 @@ impl Context {
         }
 
         // 5. Update state on every node
-        let nodes: Vec<NodeId> = props.graph.nodes.clone();
-        for update_node_id in nodes.iter() {
+        let mut node_ids_scratch = std::mem::take(&mut self.node_ids_scratch);
+        node_ids_scratch.clear();
+        node_ids_scratch.extend(props.graph.nodes.iter().copied());
+        for update_node_id in node_ids_scratch.iter() {
             let node_props = props.node_props.get_mut(update_node_id).unwrap();
             self.update_node(device, queue, *update_node_id, node_props);
         }
+        self.node_ids_scratch = node_ids_scratch;
     }
 
     /// Paint the given render target.
@@ -523,15 +532,21 @@ impl Context {
         render_target_id: RenderTargetId,
     ) -> HashMap<NodeId, ArcTextureViewSampler> {
         // Ask the nodes to paint in topo order. Return the resulting textures in a hashmap by node id.
-        let mut result: HashMap<NodeId, ArcTextureViewSampler> = HashMap::new();
+        let mut result: HashMap<NodeId, ArcTextureViewSampler> =
+            HashMap::with_capacity(self.graph.nodes.len());
+        let mut node_ids_scratch = std::mem::take(&mut self.node_ids_scratch);
+        node_ids_scratch.clear();
+        node_ids_scratch.extend(self.graph.nodes.iter().copied());
+        let mut input_textures_scratch = std::mem::take(&mut self.input_textures_scratch);
 
-        let node_ids: Vec<NodeId> = self.graph.nodes.clone();
-        for paint_node_id in &node_ids {
+        for paint_node_id in &node_ids_scratch {
             let input_nodes = self.graph_input_mapping.get(paint_node_id).unwrap();
-            let input_textures: Vec<Option<ArcTextureViewSampler>> = input_nodes
-                .iter()
-                .map(|maybe_id| maybe_id.as_ref().map(|id| result.get(id).unwrap().clone()))
-                .collect();
+            input_textures_scratch.clear();
+            input_textures_scratch.extend(
+                input_nodes
+                    .iter()
+                    .map(|maybe_id| maybe_id.as_ref().map(|id| result.get(id).unwrap().clone())),
+            );
 
             let output_texture = self.paint_node(
                 device,
@@ -539,11 +554,14 @@ impl Context {
                 encoder,
                 *paint_node_id,
                 render_target_id,
-                &input_textures,
+                &input_textures_scratch,
             );
 
             result.insert(*paint_node_id, output_texture);
         }
+
+        self.node_ids_scratch = node_ids_scratch;
+        self.input_textures_scratch = input_textures_scratch;
 
         result
     }

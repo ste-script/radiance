@@ -886,57 +886,43 @@ impl App<'_> {
             self.autosave_timer -= 1;
         }
 
+        let mut offscreen_encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Offscreen encoder"),
+            });
+
         // Paint the previews
-        let radiance_preview_paint_results = {
-            let preview_paint_start = Instant::now();
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Encoder"),
-                });
-
-            let (preview_render_target_id, _) = self.preview_render_target;
-            let results = self.ctx.paint(
-                &self.device,
-                &self.queue,
-                &mut encoder,
-                preview_render_target_id,
-            );
-            perf_sample.graph_paints += 1;
-
-            self.queue.submit(iter::once(encoder.finish()));
-            perf_sample.queue_submits += 1;
-            perf_sample.preview_paint = preview_paint_start.elapsed();
-            results
-        };
+        let preview_paint_start = Instant::now();
+        let (preview_render_target_id, _) = self.preview_render_target;
+        let radiance_preview_paint_results = self.ctx.paint(
+            &self.device,
+            &self.queue,
+            &mut offscreen_encoder,
+            preview_render_target_id,
+        );
+        perf_sample.graph_paints += 1;
+        perf_sample.preview_paint = preview_paint_start.elapsed();
 
         // Paint the UI BG
-        let radiance_ui_bg_paint_results = {
-            let ui_bg_paint_start = Instant::now();
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Encoder"),
-                });
-
-            if let Some((&bg_render_target_id, _)) = self
-                .app_ui
-                .as_ref()
-                .map(|app_ui| app_ui.ui_bg.render_target())
-            {
-                let results =
-                    self.ctx
-                        .paint(&self.device, &self.queue, &mut encoder, bg_render_target_id);
-                perf_sample.graph_paints += 1;
-
-                self.queue.submit(iter::once(encoder.finish()));
-                perf_sample.queue_submits += 1;
-                perf_sample.ui_bg_paint = ui_bg_paint_start.elapsed();
-                results
-            } else {
-                Default::default()
-            }
+        let ui_bg_paint_start = Instant::now();
+        let radiance_ui_bg_paint_results = if let Some((&bg_render_target_id, _)) = self
+            .app_ui
+            .as_ref()
+            .map(|app_ui| app_ui.ui_bg.render_target())
+        {
+            let results = self
+                .ctx
+                .paint(&self.device, &self.queue, &mut offscreen_encoder, bg_render_target_id);
+            perf_sample.graph_paints += 1;
+            perf_sample.ui_bg_paint = ui_bg_paint_start.elapsed();
+            results
+        } else {
+            Default::default()
         };
+
+        self.queue.submit(iter::once(offscreen_encoder.finish()));
+        perf_sample.queue_submits += 1;
 
         // Run the UI
         let ui_cpu_start = Instant::now();

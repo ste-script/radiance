@@ -661,93 +661,84 @@ impl WinitOutput<'_> {
                     .set_fullscreen(Some(Fullscreen::Borderless(Some(monitor))));
             }
 
-            // Paint
-            let graph_paint_start = Instant::now();
+            // Paint virtual and present in one submission.
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Radiance output encoder"),
             });
 
             let results = ctx.paint(device, queue, &mut encoder, screen_output.render_target_id);
-            queue.submit(iter::once(encoder.finish()));
             stats.graph_paints += 1;
-            stats.queue_submits += 1;
-            let _ = graph_paint_start.elapsed();
 
             // See if we can present (window is not occluded)
             // (on Mac, we can always draw.) XXX test this
             // (on Windows, we can always draw, and in fact, the redraw signal doesn't fire as it should.)
-            if cfg!(target_os = "linux") && !screen_output.can_draw {
-                continue;
-            }
-            screen_output.can_draw = false;
-            screen_output.window.request_redraw();
+            if !(cfg!(target_os = "linux") && !screen_output.can_draw) {
+                screen_output.can_draw = false;
+                screen_output.window.request_redraw();
 
-            let surface_paint_start = Instant::now();
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Surface output encoder"),
-            });
-
-            if let Some(texture) = results.get(node_id) {
-                let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    layout: &self.screen_output_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&texture.view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&texture.sampler),
-                        },
-                    ],
-                    label: Some("output bind group"),
-                });
-
-                // Record output render pass.
-                let output = screen_output.surface.get_current_texture().unwrap();
-                let view = output
-                    .texture
-                    .create_view(&wgpu::TextureViewDescriptor::default());
-
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Output window render pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: 0.,
-                                    g: 0.,
-                                    b: 0.,
-                                    a: 0.,
-                                }),
-                                store: wgpu::StoreOp::Store,
+                if let Some(texture) = results.get(node_id) {
+                    let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        layout: &self.screen_output_bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&texture.view),
                             },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&texture.sampler),
+                            },
+                        ],
+                        label: Some("output bind group"),
                     });
-                    stats.surface_passes += 1;
 
-                    render_pass.set_pipeline(&screen_output.render_pipeline);
-                    render_pass.set_bind_group(0, &output_bind_group, &[]);
-                    render_pass.draw(0..6, 0..1);
+                    let output = screen_output.surface.get_current_texture().unwrap();
+                    let view = output
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+
+                    {
+                        let mut render_pass =
+                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("Output window render pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                                            r: 0.,
+                                            g: 0.,
+                                            b: 0.,
+                                            a: 0.,
+                                        }),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                    depth_slice: None,
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                        stats.surface_passes += 1;
+
+                        render_pass.set_pipeline(&screen_output.render_pipeline);
+                        render_pass.set_bind_group(0, &output_bind_group, &[]);
+                        render_pass.draw(0..6, 0..1);
+                    }
+
+                    queue.submit(iter::once(encoder.finish()));
+                    stats.queue_submits += 1;
+
+                    screen_output.window.pre_present_notify();
+                    output.present();
+                    stats.presented_windows += 1;
+                    stats.did_vsync = true;
+                    continue;
                 }
-
-                // Submit the commands.
-                queue.submit(iter::once(encoder.finish()));
-                stats.queue_submits += 1;
-
-                // Draw
-                screen_output.window.pre_present_notify();
-                output.present();
-                stats.presented_windows += 1;
-                stats.did_vsync = true;
-                let _ = surface_paint_start.elapsed();
             }
+
+            queue.submit(iter::once(encoder.finish()));
+            stats.queue_submits += 1;
         }
         // Paint each projection mapped output
         for (node_id, output) in self
@@ -759,17 +750,14 @@ impl WinitOutput<'_> {
                 continue;
             }
 
-            // Paint virtual
-            let graph_paint_start = Instant::now();
+            // Paint virtual and any visible screens in one submission.
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Radiance output encoder"),
             });
 
             let results = ctx.paint(device, queue, &mut encoder, output.render_target_id);
-            queue.submit(iter::once(encoder.finish()));
             stats.graph_paints += 1;
-            stats.queue_submits += 1;
-            let _ = graph_paint_start.elapsed();
+            let mut presented_outputs = Vec::new();
 
             for (screen_name, single_output) in output.screens.iter_mut() {
                 // Fullscreen
@@ -821,12 +809,6 @@ impl WinitOutput<'_> {
                 single_output.can_draw = false;
                 single_output.window.request_redraw();
 
-                // Paint physical
-                let surface_paint_start = Instant::now();
-                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Surface output encoder"),
-                });
-
                 if let Some(texture) = results.get(node_id) {
                     let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                         layout: &self.projection_mapped_output_bind_group_layout,
@@ -847,7 +829,6 @@ impl WinitOutput<'_> {
                         label: Some("output bind group"),
                     });
 
-                    // Record output render pass.
                     let output = single_output.surface.get_current_texture().unwrap();
                     let view = output
                         .texture
@@ -886,17 +867,17 @@ impl WinitOutput<'_> {
                         );
                         render_pass.draw_indexed(0..single_output.indices_count, 0, 0..1);
                     }
-
-                    // Submit the commands.
-                    queue.submit(iter::once(encoder.finish()));
-                    stats.queue_submits += 1;
-
-                    single_output.window.pre_present_notify();
-                    output.present();
-                    stats.presented_windows += 1;
-                    stats.did_vsync = true;
-                    let _ = surface_paint_start.elapsed();
+                    presented_outputs.push((single_output.window.clone(), output));
                 }
+            }
+
+            queue.submit(iter::once(encoder.finish()));
+            stats.queue_submits += 1;
+            for (window, output) in presented_outputs {
+                window.pre_present_notify();
+                output.present();
+                stats.presented_windows += 1;
+                stats.did_vsync = true;
             }
         }
 
