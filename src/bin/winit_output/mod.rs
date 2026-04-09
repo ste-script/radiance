@@ -98,6 +98,8 @@ struct VisibleScreenOutput {
     name: String,
     resolution: [u32; 2],
     can_draw: bool,
+    cached_output_texture_id: Option<(usize, usize)>,
+    output_bind_group: Option<wgpu::BindGroup>,
 }
 
 #[derive(Debug)]
@@ -114,6 +116,8 @@ struct VisibleProjectionMappedSingleOutput {
     indices: Vec<u16>,
     indices_count: u32,
     can_draw: bool,
+    cached_output_texture_id: Option<(usize, usize)>,
+    output_bind_group: Option<wgpu::BindGroup>,
 }
 
 #[derive(Debug)]
@@ -135,6 +139,37 @@ impl VisibleScreenOutput {
             self.surface.configure(device, &self.config);
         }
     }
+
+    fn update_bind_group_cache(
+        &mut self,
+        device: &wgpu::Device,
+        bind_group_layout: &wgpu::BindGroupLayout,
+        texture: &radiance::ArcTextureViewSampler,
+    ) {
+        let texture_id = (
+            Arc::as_ptr(&texture.view) as usize,
+            Arc::as_ptr(&texture.sampler) as usize,
+        );
+        if self.cached_output_texture_id == Some(texture_id) && self.output_bind_group.is_some() {
+            return;
+        }
+
+        self.cached_output_texture_id = Some(texture_id);
+        self.output_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&texture.sampler),
+                },
+            ],
+            label: Some("output bind group"),
+        }));
+    }
 }
 
 impl VisibleProjectionMappedSingleOutput {
@@ -144,6 +179,41 @@ impl VisibleProjectionMappedSingleOutput {
             self.config.height = new_size.height;
             self.surface.configure(device, &self.config);
         }
+    }
+
+    fn update_bind_group_cache(
+        &mut self,
+        device: &wgpu::Device,
+        bind_group_layout: &wgpu::BindGroupLayout,
+        texture: &radiance::ArcTextureViewSampler,
+    ) {
+        let texture_id = (
+            Arc::as_ptr(&texture.view) as usize,
+            Arc::as_ptr(&texture.sampler) as usize,
+        );
+        if self.cached_output_texture_id == Some(texture_id) && self.output_bind_group.is_some() {
+            return;
+        }
+
+        self.cached_output_texture_id = Some(texture_id);
+        self.output_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&texture.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.uniform_buffer.as_entire_binding(),
+                },
+            ],
+            label: Some("output bind group"),
+        }));
     }
 }
 
@@ -309,9 +379,14 @@ impl WinitOutput<'_> {
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        gpu_timestamp_profiler: Option<&mut super::GpuTimestampProfiler>,
     ) -> super::OutputUpdateStats {
         let update_start = Instant::now();
         let mut stats = super::OutputUpdateStats::default();
+        let mut gpu_timestamp_profiler = gpu_timestamp_profiler;
+        let screen_output_bind_group_layout = &self.screen_output_bind_group_layout;
+        let projection_mapped_output_bind_group_layout =
+            &self.projection_mapped_output_bind_group_layout;
 
         // Prune screen_outputs and projection_mapped_outputs of any nodes that are no longer present in the given graph
         self.screen_outputs.retain(|id, _| {
@@ -665,6 +740,15 @@ impl WinitOutput<'_> {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Radiance output encoder"),
             });
+            let mut gpu_submission = gpu_timestamp_profiler.as_deref_mut().and_then(|profiler| {
+                profiler.begin_submission(&[super::GpuTimingStage::Outputs])
+            });
+            if let (Some(profiler), Some(submission)) = (
+                gpu_timestamp_profiler.as_deref_mut(),
+                gpu_submission.as_ref(),
+            ) {
+                profiler.write_stage_start(&mut encoder, submission, 0);
+            }
 
             let results = ctx.paint(device, queue, &mut encoder, screen_output.render_target_id);
             stats.graph_paints += 1;
@@ -677,20 +761,12 @@ impl WinitOutput<'_> {
                 screen_output.window.request_redraw();
 
                 if let Some(texture) = results.get(node_id) {
-                    let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        layout: &self.screen_output_bind_group_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&texture.view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(&texture.sampler),
-                            },
-                        ],
-                        label: Some("output bind group"),
-                    });
+                    screen_output.update_bind_group_cache(
+                        device,
+                        screen_output_bind_group_layout,
+                        texture,
+                    );
+                    let output_bind_group = screen_output.output_bind_group.as_ref().unwrap();
 
                     let output = screen_output.surface.get_current_texture().unwrap();
                     let view = output
@@ -722,11 +798,26 @@ impl WinitOutput<'_> {
                         stats.surface_passes += 1;
 
                         render_pass.set_pipeline(&screen_output.render_pipeline);
-                        render_pass.set_bind_group(0, &output_bind_group, &[]);
+                        render_pass.set_bind_group(0, output_bind_group, &[]);
                         render_pass.draw(0..6, 0..1);
                     }
 
-                    queue.submit(iter::once(encoder.finish()));
+                    if let (Some(profiler), Some(submission)) = (
+                        gpu_timestamp_profiler.as_deref_mut(),
+                        gpu_submission.as_ref(),
+                    ) {
+                        profiler.write_stage_end(&mut encoder, submission, 0);
+                        profiler.encode_resolve(&mut encoder, submission);
+                    }
+
+                    let command_buffer = encoder.finish();
+                    if let (Some(profiler), Some(submission)) = (
+                        gpu_timestamp_profiler.as_deref_mut(),
+                        gpu_submission.take(),
+                    ) {
+                        profiler.schedule_readback(&command_buffer, submission);
+                    }
+                    queue.submit(iter::once(command_buffer));
                     stats.queue_submits += 1;
 
                     screen_output.window.pre_present_notify();
@@ -737,7 +828,22 @@ impl WinitOutput<'_> {
                 }
             }
 
-            queue.submit(iter::once(encoder.finish()));
+            if let (Some(profiler), Some(submission)) = (
+                gpu_timestamp_profiler.as_deref_mut(),
+                gpu_submission.as_ref(),
+            ) {
+                profiler.write_stage_end(&mut encoder, submission, 0);
+                profiler.encode_resolve(&mut encoder, submission);
+            }
+
+            let command_buffer = encoder.finish();
+            if let (Some(profiler), Some(submission)) = (
+                gpu_timestamp_profiler.as_deref_mut(),
+                gpu_submission.take(),
+            ) {
+                profiler.schedule_readback(&command_buffer, submission);
+            }
+            queue.submit(iter::once(command_buffer));
             stats.queue_submits += 1;
         }
         // Paint each projection mapped output
@@ -754,6 +860,15 @@ impl WinitOutput<'_> {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Radiance output encoder"),
             });
+            let mut gpu_submission = gpu_timestamp_profiler.as_deref_mut().and_then(|profiler| {
+                profiler.begin_submission(&[super::GpuTimingStage::Outputs])
+            });
+            if let (Some(profiler), Some(submission)) = (
+                gpu_timestamp_profiler.as_deref_mut(),
+                gpu_submission.as_ref(),
+            ) {
+                profiler.write_stage_start(&mut encoder, submission, 0);
+            }
 
             let results = ctx.paint(device, queue, &mut encoder, output.render_target_id);
             stats.graph_paints += 1;
@@ -810,24 +925,12 @@ impl WinitOutput<'_> {
                 single_output.window.request_redraw();
 
                 if let Some(texture) = results.get(node_id) {
-                    let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        layout: &self.projection_mapped_output_bind_group_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&texture.view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(&texture.sampler),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: single_output.uniform_buffer.as_entire_binding(),
-                            },
-                        ],
-                        label: Some("output bind group"),
-                    });
+                    single_output.update_bind_group_cache(
+                        device,
+                        projection_mapped_output_bind_group_layout,
+                        texture,
+                    );
+                    let output_bind_group = single_output.output_bind_group.as_ref().unwrap();
 
                     let output = single_output.surface.get_current_texture().unwrap();
                     let view = output
@@ -859,7 +962,7 @@ impl WinitOutput<'_> {
                         stats.surface_passes += 1;
 
                         render_pass.set_pipeline(&single_output.render_pipeline);
-                        render_pass.set_bind_group(0, &output_bind_group, &[]);
+                        render_pass.set_bind_group(0, output_bind_group, &[]);
                         render_pass.set_vertex_buffer(0, single_output.vertex_buffer.slice(..));
                         render_pass.set_index_buffer(
                             single_output.index_buffer.slice(..),
@@ -871,7 +974,22 @@ impl WinitOutput<'_> {
                 }
             }
 
-            queue.submit(iter::once(encoder.finish()));
+            if let (Some(profiler), Some(submission)) = (
+                gpu_timestamp_profiler.as_deref_mut(),
+                gpu_submission.as_ref(),
+            ) {
+                profiler.write_stage_end(&mut encoder, submission, 0);
+                profiler.encode_resolve(&mut encoder, submission);
+            }
+
+            let command_buffer = encoder.finish();
+            if let (Some(profiler), Some(submission)) = (
+                gpu_timestamp_profiler.as_deref_mut(),
+                gpu_submission.take(),
+            ) {
+                profiler.schedule_readback(&command_buffer, submission);
+            }
+            queue.submit(iter::once(command_buffer));
             stats.queue_submits += 1;
             for (window, output) in presented_outputs {
                 window.pre_present_notify();
@@ -991,6 +1109,8 @@ impl WinitOutput<'_> {
             name: name.to_owned(),
             resolution: *resolution,
             can_draw: false,
+            cached_output_texture_id: None,
+            output_bind_group: None,
         }
     }
 
@@ -1101,6 +1221,8 @@ impl WinitOutput<'_> {
             indices: Vec::<_>::new(),
             indices_count: 0,
             can_draw: false,
+            cached_output_texture_id: None,
+            output_bind_group: None,
         }
     }
 

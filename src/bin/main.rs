@@ -15,7 +15,7 @@ use std::io::{ErrorKind, Write};
 use std::path::Path;
 #[cfg(target_os = "linux")]
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use std::{env, iter};
 use winit::application::ApplicationHandler;
@@ -46,6 +46,10 @@ const DEFAULT_SYSTEM_SOURCE_LABEL: &str = "System default source";
 const PERF_LOG_ENV: &str = "RADIANCE_PERF_LOG";
 const PERF_LOG_INTERVAL_ENV: &str = "RADIANCE_PERF_LOG_INTERVAL";
 const PERF_LOG_DEFAULT_INTERVAL_FRAMES: usize = 240;
+const PREVIEW_RENDER_INTERVAL_WITH_VISIBLE_OUTPUT: usize = 2;
+const UI_BG_RENDER_INTERVAL_WITH_VISIBLE_OUTPUT: usize = 3;
+const GPU_TIMESTAMP_SLOT_COUNT: usize = 32;
+const GPU_TIMESTAMP_MAX_QUERIES_PER_SUBMISSION: u32 = 4;
 
 const LOGO_SIZE: egui::Vec2 = egui::Vec2 { x: 56., y: 56. };
 
@@ -100,11 +104,7 @@ impl PerfReporter {
             return None;
         }
 
-        let report_every_frames = env::var(PERF_LOG_INTERVAL_ENV)
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(PERF_LOG_DEFAULT_INTERVAL_FRAMES);
+        let report_every_frames = perf_log_interval_frames();
 
         eprintln!(
             "Radiance performance logging enabled; reporting every {} frames",
@@ -181,6 +181,301 @@ impl PerfReporter {
 
         self.samples.clear();
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum GpuTimingStage {
+    Preview,
+    UiBg,
+    Outputs,
+    Ui,
+}
+
+#[derive(Debug, Default)]
+struct GpuStageStats {
+    count: usize,
+    total_ms: f64,
+    max_ms: f64,
+}
+
+impl GpuStageStats {
+    fn record(&mut self, duration_ms: f64) {
+        self.count += 1;
+        self.total_ms += duration_ms;
+        self.max_ms = self.max_ms.max(duration_ms);
+    }
+
+    fn average_ms(&self) -> f64 {
+        if self.count == 0 {
+            0.0
+        } else {
+            self.total_ms / self.count as f64
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct GpuTimestampReporter {
+    report_every_frames: usize,
+    preview_frames: usize,
+    preview: GpuStageStats,
+    ui_bg: GpuStageStats,
+    outputs: GpuStageStats,
+    ui: GpuStageStats,
+}
+
+impl GpuTimestampReporter {
+    fn new(report_every_frames: usize) -> Self {
+        Self {
+            report_every_frames,
+            ..Default::default()
+        }
+    }
+
+    fn record(&mut self, stage: GpuTimingStage, duration_ms: f64) {
+        match stage {
+            GpuTimingStage::Preview => self.preview.record(duration_ms),
+            GpuTimingStage::UiBg => self.ui_bg.record(duration_ms),
+            GpuTimingStage::Outputs => self.outputs.record(duration_ms),
+            GpuTimingStage::Ui => self.ui.record(duration_ms),
+        }
+
+        if matches!(stage, GpuTimingStage::Preview) {
+            self.preview_frames += 1;
+            if self.preview_frames >= self.report_every_frames {
+                self.flush();
+            }
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.preview_frames == 0 {
+            return;
+        }
+
+        eprintln!(
+            concat!(
+                "gpu frames={} preview={:.2}ms ui_bg={:.2}ms outputs={:.2}ms ui={:.2}ms ",
+                "| max preview={:.2} outputs={:.2} ui={:.2}"
+            ),
+            self.preview_frames,
+            self.preview.average_ms(),
+            self.ui_bg.average_ms(),
+            self.outputs.average_ms(),
+            self.ui.average_ms(),
+            self.preview.max_ms,
+            self.outputs.max_ms,
+            self.ui.max_ms,
+        );
+
+        self.preview_frames = 0;
+        self.preview = GpuStageStats::default();
+        self.ui_bg = GpuStageStats::default();
+        self.outputs = GpuStageStats::default();
+        self.ui = GpuStageStats::default();
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GpuTimestampSpan {
+    stage: GpuTimingStage,
+    start_query: u32,
+    end_query: u32,
+}
+
+#[derive(Debug)]
+struct GpuTimestampSlot {
+    query_set: wgpu::QuerySet,
+    resolve_buffer: wgpu::Buffer,
+    readback_buffer: wgpu::Buffer,
+    pending: bool,
+    query_count: u32,
+    spans: Vec<GpuTimestampSpan>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GpuTimestampSubmission {
+    slot_index: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GpuTimestampReadback {
+    slot_index: usize,
+    success: bool,
+}
+
+#[derive(Debug)]
+struct GpuTimestampProfiler {
+    timestamp_period_ns: f64,
+    slots: Vec<GpuTimestampSlot>,
+    reporter: GpuTimestampReporter,
+    readback_tx: mpsc::Sender<GpuTimestampReadback>,
+    readback_rx: mpsc::Receiver<GpuTimestampReadback>,
+    warned_slot_exhaustion: bool,
+}
+
+impl GpuTimestampProfiler {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, report_every_frames: usize) -> Self {
+        let query_buffer_size =
+            GPU_TIMESTAMP_MAX_QUERIES_PER_SUBMISSION as u64 * std::mem::size_of::<u64>() as u64;
+        let slots = (0..GPU_TIMESTAMP_SLOT_COUNT)
+            .map(|slot_index| GpuTimestampSlot {
+                query_set: device.create_query_set(&wgpu::QuerySetDescriptor {
+                    label: Some(&format!("Radiance GPU timestamp query set {}", slot_index)),
+                    ty: wgpu::QueryType::Timestamp,
+                    count: GPU_TIMESTAMP_MAX_QUERIES_PER_SUBMISSION,
+                }),
+                resolve_buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("Radiance GPU timestamp resolve {}", slot_index)),
+                    size: query_buffer_size,
+                    usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }),
+                readback_buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("Radiance GPU timestamp readback {}", slot_index)),
+                    size: query_buffer_size,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }),
+                pending: false,
+                query_count: 0,
+                spans: Vec::new(),
+            })
+            .collect();
+        let (readback_tx, readback_rx) = mpsc::channel();
+
+        eprintln!(
+            "Radiance GPU timestamp logging enabled; query period {:.3}ns",
+            queue.get_timestamp_period()
+        );
+
+        Self {
+            timestamp_period_ns: queue.get_timestamp_period() as f64,
+            slots,
+            reporter: GpuTimestampReporter::new(report_every_frames),
+            readback_tx,
+            readback_rx,
+            warned_slot_exhaustion: false,
+        }
+    }
+
+    fn begin_submission(&mut self, stages: &[GpuTimingStage]) -> Option<GpuTimestampSubmission> {
+        let slot_index = match self.slots.iter().position(|slot| !slot.pending) {
+            Some(slot_index) => slot_index,
+            None => {
+                if !self.warned_slot_exhaustion {
+                    eprintln!("Radiance GPU timestamp logging dropped samples because all slots were busy");
+                    self.warned_slot_exhaustion = true;
+                }
+                return None;
+            }
+        };
+
+        let slot = &mut self.slots[slot_index];
+        slot.pending = true;
+        slot.query_count = 0;
+        slot.spans.clear();
+        for stage in stages {
+            let start_query = slot.query_count;
+            let end_query = start_query + 1;
+            slot.spans.push(GpuTimestampSpan {
+                stage: *stage,
+                start_query,
+                end_query,
+            });
+            slot.query_count += 2;
+        }
+
+        Some(GpuTimestampSubmission { slot_index })
+    }
+
+    fn write_stage_start(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        submission: &GpuTimestampSubmission,
+        stage_index: usize,
+    ) {
+        let slot = &self.slots[submission.slot_index];
+        encoder.write_timestamp(&slot.query_set, slot.spans[stage_index].start_query);
+    }
+
+    fn write_stage_end(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        submission: &GpuTimestampSubmission,
+        stage_index: usize,
+    ) {
+        let slot = &self.slots[submission.slot_index];
+        encoder.write_timestamp(&slot.query_set, slot.spans[stage_index].end_query);
+    }
+
+    fn encode_resolve(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        submission: &GpuTimestampSubmission,
+    ) {
+        let slot = &self.slots[submission.slot_index];
+        let byte_len = slot.query_count as u64 * std::mem::size_of::<u64>() as u64;
+        encoder.resolve_query_set(&slot.query_set, 0..slot.query_count, &slot.resolve_buffer, 0);
+        encoder.copy_buffer_to_buffer(&slot.resolve_buffer, 0, &slot.readback_buffer, 0, byte_len);
+    }
+
+    fn schedule_readback(
+        &mut self,
+        command_buffer: &wgpu::CommandBuffer,
+        submission: GpuTimestampSubmission,
+    ) {
+        let slot = &self.slots[submission.slot_index];
+        let byte_len = slot.query_count as u64 * std::mem::size_of::<u64>() as u64;
+        let sender = self.readback_tx.clone();
+        command_buffer.map_buffer_on_submit(
+            &slot.readback_buffer,
+            wgpu::MapMode::Read,
+            0..byte_len,
+            move |result| {
+                let _ = sender.send(GpuTimestampReadback {
+                    slot_index: submission.slot_index,
+                    success: result.is_ok(),
+                });
+            },
+        );
+    }
+
+    fn poll(&mut self, device: &wgpu::Device) {
+        let _ = device.poll(wgpu::PollType::Poll);
+
+        while let Ok(readback) = self.readback_rx.try_recv() {
+            let slot = &mut self.slots[readback.slot_index];
+            if readback.success {
+                let byte_len = slot.query_count as u64 * std::mem::size_of::<u64>() as u64;
+                let mapped_range = slot.readback_buffer.slice(..byte_len).get_mapped_range();
+                let timestamps: &[u64] = bytemuck::cast_slice(&mapped_range);
+                for span in &slot.spans {
+                    let start = timestamps[span.start_query as usize];
+                    let end = timestamps[span.end_query as usize];
+                    if end >= start {
+                        let duration_ms =
+                            (end - start) as f64 * self.timestamp_period_ns / 1_000_000.0;
+                        self.reporter.record(span.stage, duration_ms);
+                    }
+                }
+                drop(mapped_range);
+                slot.readback_buffer.unmap();
+            }
+
+            slot.pending = false;
+            slot.query_count = 0;
+            slot.spans.clear();
+        }
+    }
+}
+
+fn perf_log_interval_frames() -> usize {
+    env::var(PERF_LOG_INTERVAL_ENV)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(PERF_LOG_DEFAULT_INTERVAL_FRAMES)
 }
 
 fn env_var_truthy(name: &str) -> bool {
@@ -515,8 +810,24 @@ fn main() {
     }))
     .unwrap();
 
+    let perf_logging_enabled = env_var_truthy(PERF_LOG_ENV);
+    let gpu_timestamps_enabled = perf_logging_enabled
+        && adapter
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
+    if perf_logging_enabled && !gpu_timestamps_enabled {
+        eprintln!(
+            "Radiance GPU timestamp logging unavailable; adapter lacks TIMESTAMP_QUERY_INSIDE_ENCODERS"
+        );
+    }
+    let mut required_features = wgpu::Features::TEXTURE_BINDING_ARRAY;
+    if gpu_timestamps_enabled {
+        required_features |=
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+    }
+
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        required_features: wgpu::Features::TEXTURE_BINDING_ARRAY,
+        required_features,
         // WebGL doesn't support all of wgpu's features, so if
         // we're building for the web we'll have to disable some.
         required_limits: if cfg!(target_arch = "wasm32") {
@@ -539,7 +850,7 @@ fn main() {
     event_loop.set_control_flow(ControlFlow::Poll);
 
     // Prepare & run app
-    let mut app = App::new(instance, adapter, device, queue);
+    let mut app = App::new(instance, adapter, device, queue, gpu_timestamps_enabled);
     event_loop.run_app(&mut app).unwrap();
 }
 
@@ -567,9 +878,14 @@ struct App<'a> {
     available_devices: Vec<AudioInputDevice>,
     selected_system_source_name: String,
     available_system_sources: Vec<SystemAudioSource>,
+    frame_index: usize,
+    last_preview_paint_results: HashMap<NodeId, ArcTextureViewSampler>,
+    last_ui_bg_paint_results: HashMap<NodeId, ArcTextureViewSampler>,
+    last_ui_bg_render_target_id: Option<RenderTargetId>,
     preview_images: HashMap<NodeId, egui::TextureId>,
     winit_output: WinitOutput<'a>,
     perf_reporter: Option<PerfReporter>,
+    gpu_timestamp_profiler: Option<GpuTimestampProfiler>,
     app_ui: Option<AppUi>, // Stuff we can't make until we have a window
     _sleep_guard: Option<keepawake::KeepAwake>,
 }
@@ -601,6 +917,7 @@ impl App<'_> {
         adapter: wgpu::Adapter,
         device: wgpu::Device,
         queue: wgpu::Queue,
+        gpu_timestamps_enabled: bool,
     ) -> Self {
         let resource_dir = directories::ProjectDirs::from("", "", "Radiance")
             .unwrap()
@@ -768,6 +1085,8 @@ impl App<'_> {
             .create()
             .map_err(|e| println!("Failed to inhibit sleep: {}", e))
             .ok();
+        let gpu_timestamp_profiler = gpu_timestamps_enabled
+            .then(|| GpuTimestampProfiler::new(&device, &queue, perf_log_interval_frames()));
 
         App {
             instance,
@@ -793,9 +1112,14 @@ impl App<'_> {
             available_devices,
             selected_system_source_name: DEFAULT_SYSTEM_SOURCE_LABEL.to_owned(),
             available_system_sources,
+            frame_index: 0,
+            last_preview_paint_results: HashMap::new(),
+            last_ui_bg_paint_results: HashMap::new(),
+            last_ui_bg_render_target_id: None,
             preview_images: Default::default(),
             winit_output,
             perf_reporter: PerfReporter::from_env(),
+            gpu_timestamp_profiler,
             app_ui: None,
             _sleep_guard: sleep_guard,
         }
@@ -815,11 +1139,59 @@ impl App<'_> {
         did_vsync
     }
 
+    fn preview_cache_stale(&self) -> bool {
+        self.last_preview_paint_results.len() != self.props.graph.nodes.len()
+            || self
+                .props
+                .graph
+                .nodes
+                .iter()
+                .any(|node_id| !self.last_preview_paint_results.contains_key(node_id))
+    }
+
+    fn update_preview_textures(
+        &mut self,
+        radiance_paint_results: &HashMap<NodeId, ArcTextureViewSampler>,
+    ) {
+        let app_ui = self.app_ui.as_mut().unwrap();
+
+        for node_id in self.props.graph.nodes.iter() {
+            let native_texture = &radiance_paint_results.get(node_id).unwrap().view;
+            match self.preview_images.entry(*node_id) {
+                Entry::Vacant(e) => {
+                    e.insert(app_ui.egui_renderer.register_native_texture(
+                        &self.device,
+                        native_texture,
+                        wgpu::FilterMode::Linear,
+                    ));
+                }
+                Entry::Occupied(e) => {
+                    app_ui.egui_renderer.update_egui_texture_from_wgpu_texture(
+                        &self.device,
+                        native_texture,
+                        wgpu::FilterMode::Linear,
+                        *e.get(),
+                    );
+                }
+            }
+        }
+
+        for (node_id, egui_texture_id) in self.preview_images.iter() {
+            if !self.props.graph.nodes.contains(node_id) {
+                app_ui.egui_renderer.free_texture(egui_texture_id);
+            }
+        }
+    }
+
     // returns true if present() was called (forcing vsync)
     fn update(&mut self, event_loop: &ActiveEventLoop) -> bool {
         let frame_start = Instant::now();
         let mut did_vsync = false;
         let mut perf_sample = FramePerformanceSample::default();
+        self.frame_index = self.frame_index.wrapping_add(1);
+        if let Some(gpu_timestamp_profiler) = &mut self.gpu_timestamp_profiler {
+            gpu_timestamp_profiler.poll(&self.device);
+        }
 
         // Update
         let mir_poll_start = Instant::now();
@@ -886,43 +1258,147 @@ impl App<'_> {
             self.autosave_timer -= 1;
         }
 
-        let mut offscreen_encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Offscreen encoder"),
-            });
-
-        // Paint the previews
-        let preview_paint_start = Instant::now();
-        let (preview_render_target_id, _) = self.preview_render_target;
-        let radiance_preview_paint_results = self.ctx.paint(
-            &self.device,
-            &self.queue,
-            &mut offscreen_encoder,
-            preview_render_target_id,
-        );
-        perf_sample.graph_paints += 1;
-        perf_sample.preview_paint = preview_paint_start.elapsed();
-
-        // Paint the UI BG
-        let ui_bg_paint_start = Instant::now();
-        let radiance_ui_bg_paint_results = if let Some((&bg_render_target_id, _)) = self
+        let ui_bg_render_target = self
             .app_ui
             .as_ref()
-            .map(|app_ui| app_ui.ui_bg.render_target())
-        {
-            let results = self
-                .ctx
-                .paint(&self.device, &self.queue, &mut offscreen_encoder, bg_render_target_id);
-            perf_sample.graph_paints += 1;
-            perf_sample.ui_bg_paint = ui_bg_paint_start.elapsed();
-            results
+            .map(|app_ui| *app_ui.ui_bg.render_target().0);
+        let visible_output_count = self.winit_output.render_targets_iter().count();
+        let preview_interval = if visible_output_count > 0 {
+            PREVIEW_RENDER_INTERVAL_WITH_VISIBLE_OUTPUT
         } else {
-            Default::default()
+            1
+        };
+        let ui_bg_interval = if visible_output_count > 0 {
+            UI_BG_RENDER_INTERVAL_WITH_VISIBLE_OUTPUT
+        } else {
+            1
+        };
+        let preview_cache_stale = self.preview_cache_stale();
+        let should_render_preview = preview_cache_stale
+            || self.last_preview_paint_results.is_empty()
+            || self.frame_index % preview_interval == 0;
+        let should_render_ui_bg = match ui_bg_render_target {
+            Some(bg_render_target_id) => {
+                preview_cache_stale
+                    || self.last_ui_bg_paint_results.is_empty()
+                    || self.last_ui_bg_render_target_id != Some(bg_render_target_id)
+                    || self.frame_index % ui_bg_interval == 0
+            }
+            None => false,
         };
 
-        self.queue.submit(iter::once(offscreen_encoder.finish()));
-        perf_sample.queue_submits += 1;
+        if ui_bg_render_target.is_none() {
+            self.last_ui_bg_render_target_id = None;
+            self.last_ui_bg_paint_results.clear();
+        }
+
+        let mut radiance_ui_bg_paint_results = self.last_ui_bg_paint_results.clone();
+        if should_render_preview || should_render_ui_bg {
+            let mut offscreen_encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Offscreen encoder"),
+                });
+            let mut offscreen_submission = self
+                .gpu_timestamp_profiler
+                .as_mut()
+                .and_then(|gpu_timestamp_profiler| {
+                    match (should_render_preview, should_render_ui_bg) {
+                        (true, true) => gpu_timestamp_profiler
+                            .begin_submission(&[GpuTimingStage::Preview, GpuTimingStage::UiBg]),
+                        (true, false) => {
+                            gpu_timestamp_profiler.begin_submission(&[GpuTimingStage::Preview])
+                        }
+                        (false, true) => {
+                            gpu_timestamp_profiler.begin_submission(&[GpuTimingStage::UiBg])
+                        }
+                        (false, false) => None,
+                    }
+                });
+
+            let mut gpu_stage_index = 0usize;
+            if should_render_preview {
+                if let (Some(gpu_timestamp_profiler), Some(submission)) = (
+                    self.gpu_timestamp_profiler.as_mut(),
+                    offscreen_submission.as_ref(),
+                ) {
+                    gpu_timestamp_profiler
+                        .write_stage_start(&mut offscreen_encoder, submission, gpu_stage_index);
+                }
+
+                let preview_paint_start = Instant::now();
+                let (preview_render_target_id, _) = self.preview_render_target;
+                let radiance_preview_paint_results = self.ctx.paint(
+                    &self.device,
+                    &self.queue,
+                    &mut offscreen_encoder,
+                    preview_render_target_id,
+                );
+                perf_sample.graph_paints += 1;
+                perf_sample.preview_paint = preview_paint_start.elapsed();
+
+                if let (Some(gpu_timestamp_profiler), Some(submission)) = (
+                    self.gpu_timestamp_profiler.as_mut(),
+                    offscreen_submission.as_ref(),
+                ) {
+                    gpu_timestamp_profiler
+                        .write_stage_end(&mut offscreen_encoder, submission, gpu_stage_index);
+                }
+
+                self.update_preview_textures(&radiance_preview_paint_results);
+                self.last_preview_paint_results = radiance_preview_paint_results;
+                gpu_stage_index += 1;
+            }
+
+            if should_render_ui_bg {
+                if let (Some(gpu_timestamp_profiler), Some(submission)) = (
+                    self.gpu_timestamp_profiler.as_mut(),
+                    offscreen_submission.as_ref(),
+                ) {
+                    gpu_timestamp_profiler
+                        .write_stage_start(&mut offscreen_encoder, submission, gpu_stage_index);
+                }
+
+                let ui_bg_paint_start = Instant::now();
+                let bg_render_target_id = ui_bg_render_target.unwrap();
+                radiance_ui_bg_paint_results = self.ctx.paint(
+                    &self.device,
+                    &self.queue,
+                    &mut offscreen_encoder,
+                    bg_render_target_id,
+                );
+                perf_sample.graph_paints += 1;
+                perf_sample.ui_bg_paint = ui_bg_paint_start.elapsed();
+
+                if let (Some(gpu_timestamp_profiler), Some(submission)) = (
+                    self.gpu_timestamp_profiler.as_mut(),
+                    offscreen_submission.as_ref(),
+                ) {
+                    gpu_timestamp_profiler
+                        .write_stage_end(&mut offscreen_encoder, submission, gpu_stage_index);
+                }
+
+                self.last_ui_bg_render_target_id = Some(bg_render_target_id);
+                self.last_ui_bg_paint_results = radiance_ui_bg_paint_results.clone();
+            }
+
+            if let (Some(gpu_timestamp_profiler), Some(submission)) = (
+                self.gpu_timestamp_profiler.as_mut(),
+                offscreen_submission.as_ref(),
+            ) {
+                gpu_timestamp_profiler.encode_resolve(&mut offscreen_encoder, submission);
+            }
+
+            let offscreen_command_buffer = offscreen_encoder.finish();
+            if let (Some(gpu_timestamp_profiler), Some(submission)) = (
+                self.gpu_timestamp_profiler.as_mut(),
+                offscreen_submission.take(),
+            ) {
+                gpu_timestamp_profiler.schedule_readback(&offscreen_command_buffer, submission);
+            }
+            self.queue.submit(iter::once(offscreen_command_buffer));
+            perf_sample.queue_submits += 1;
+        }
 
         // Run the UI
         let ui_cpu_start = Instant::now();
@@ -933,7 +1409,7 @@ impl App<'_> {
             let raw_input = app_ui.egui_state.take_egui_input(&app_ui.window);
             app_ui.egui_ctx.begin_pass(raw_input);
         }
-        self.ui(&music_info, &radiance_preview_paint_results);
+        self.ui(&music_info);
 
         let app_ui = self.app_ui.as_mut().unwrap();
         let full_output = app_ui.egui_ctx.end_pass();
@@ -972,6 +1448,7 @@ impl App<'_> {
             &self.adapter,
             &self.device,
             &self.queue,
+            self.gpu_timestamp_profiler.as_mut(),
         );
         perf_sample.absorb_output_update(&output_update_stats);
         if output_update_stats.did_vsync {
@@ -1021,6 +1498,18 @@ impl App<'_> {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
+        let mut ui_submission = self
+            .gpu_timestamp_profiler
+            .as_mut()
+            .and_then(|gpu_timestamp_profiler| {
+                gpu_timestamp_profiler.begin_submission(&[GpuTimingStage::Ui])
+            });
+        if let (Some(gpu_timestamp_profiler), Some(submission)) = (
+            self.gpu_timestamp_profiler.as_mut(),
+            ui_submission.as_ref(),
+        ) {
+            gpu_timestamp_profiler.write_stage_start(&mut encoder, submission, 0);
+        }
         app_ui.egui_renderer.update_buffers(
             &self.device,
             &self.queue,
@@ -1056,7 +1545,21 @@ impl App<'_> {
                 &screen_descriptor,
             );
         }
-        self.queue.submit(std::iter::once(encoder.finish()));
+        if let (Some(gpu_timestamp_profiler), Some(submission)) = (
+            self.gpu_timestamp_profiler.as_mut(),
+            ui_submission.as_ref(),
+        ) {
+            gpu_timestamp_profiler.write_stage_end(&mut encoder, submission, 0);
+            gpu_timestamp_profiler.encode_resolve(&mut encoder, submission);
+        }
+        let ui_command_buffer = encoder.finish();
+        if let (Some(gpu_timestamp_profiler), Some(submission)) = (
+            self.gpu_timestamp_profiler.as_mut(),
+            ui_submission.take(),
+        ) {
+            gpu_timestamp_profiler.schedule_readback(&ui_command_buffer, submission);
+        }
+        self.queue.submit(std::iter::once(ui_command_buffer));
         perf_sample.queue_submits += 1;
         perf_sample.ui_gpu = ui_gpu_start.elapsed();
 
@@ -1072,11 +1575,7 @@ impl App<'_> {
         self.finish_frame(frame_start, perf_sample, did_vsync)
     }
 
-    fn ui(
-        &mut self,
-        music_info: &MusicInfo,
-        radiance_paint_results: &HashMap<NodeId, ArcTextureViewSampler>,
-    ) {
+    fn ui(&mut self, music_info: &MusicInfo) {
         fn update_or_register_native_texture(
             egui_renderer: &mut egui_wgpu::Renderer,
             device: &wgpu::Device,
@@ -1108,27 +1607,6 @@ impl App<'_> {
         let spectrum_size = egui::vec2(330., 75.);
         let beat_size = egui::vec2(75., 75.);
         {
-            for node_id in self.props.graph.nodes.iter() {
-                let native_texture = &radiance_paint_results.get(&node_id).unwrap().view;
-                match self.preview_images.entry(*node_id) {
-                    Entry::Vacant(e) => {
-                        e.insert(app_ui.egui_renderer.register_native_texture(
-                            &self.device,
-                            native_texture,
-                            wgpu::FilterMode::Linear,
-                        ));
-                    }
-                    Entry::Occupied(e) => {
-                        app_ui.egui_renderer.update_egui_texture_from_wgpu_texture(
-                            &self.device,
-                            native_texture,
-                            wgpu::FilterMode::Linear,
-                            *e.get(),
-                        );
-                    }
-                }
-            }
-
             for (node_id, egui_texture_id) in self.preview_images.iter() {
                 if !self.props.graph.nodes.contains(node_id) {
                     app_ui.egui_renderer.free_texture(egui_texture_id);
