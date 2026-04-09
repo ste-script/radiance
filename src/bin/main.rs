@@ -6,12 +6,15 @@
 
 extern crate nalgebra as na;
 
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fs::{self, read_to_string, File};
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{env, iter};
@@ -21,8 +24,8 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
 use radiance::{
-    ArcTextureViewSampler, AutoDJ, Context, InsertionPoint, Mir, MusicInfo, NodeId, Props,
-    RenderTarget, RenderTargetId,
+    ArcTextureViewSampler, AudioInputDevice, AutoDJ, Context, InputDeviceKind, InsertionPoint,
+    Mir, MusicInfo, NodeId, Props, RenderTarget, RenderTargetId,
 };
 
 mod ui;
@@ -37,8 +40,24 @@ use winit_output::WinitOutput;
 
 const AUTOSAVE_INTERVAL_FRAMES: usize = 60 * 10;
 const AUTOSAVE_FILENAME: &str = "autosave.json";
+const APP_SETTINGS_FILENAME: &str = "settings.json";
+const DEFAULT_AUDIO_INPUT_LABEL: &str = "Default input";
+const DEFAULT_SYSTEM_SOURCE_LABEL: &str = "System default source";
 
 const LOGO_SIZE: egui::Vec2 = egui::Vec2 { x: 56., y: 56. };
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct AppSettings {
+    #[serde(default)]
+    sync_input_device_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SystemAudioSource {
+    name: String,
+    label: String,
+    is_monitor: bool,
+}
 
 fn autosave(resource_dir: &Path, props: &Props) {
     let inner = || {
@@ -51,6 +70,224 @@ fn autosave(resource_dir: &Path, props: &Props) {
     };
 
     inner().unwrap_or_else(|msg: String| println!("Failed to write autosave file: {}", msg));
+}
+
+fn read_app_settings(resource_dir: &Path) -> Result<AppSettings, String> {
+    let contents = match read_to_string(resource_dir.join(APP_SETTINGS_FILENAME)) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            return Ok(AppSettings::default());
+        }
+        Err(e) => return Err(format!("{:?}", e)),
+    };
+    serde_json::from_str(contents.as_str()).map_err(|e| format!("{:?}", e))
+}
+
+fn write_app_settings(resource_dir: &Path, settings: &AppSettings) {
+    let inner = || {
+        let contents = serde_json::to_string(settings).map_err(|e| format!("{:?}", e))?;
+        let mut file = File::create(resource_dir.join(APP_SETTINGS_FILENAME))
+            .map_err(|e| format!("{:?}", e))?;
+        file.write_all(contents.as_bytes())
+            .map_err(|e| format!("{:?}", e))?;
+        Ok(())
+    };
+
+    inner().unwrap_or_else(|msg: String| println!("Failed to write app settings: {}", msg));
+}
+
+fn selected_sync_input_label(device_name: Option<&str>) -> String {
+    device_name.unwrap_or(DEFAULT_AUDIO_INPUT_LABEL).to_owned()
+}
+
+fn restore_sync_input_device(
+    settings: &AppSettings,
+    available_devices: &[AudioInputDevice],
+) -> Option<String> {
+    settings.sync_input_device_name.as_ref().and_then(|device_name| {
+        if available_devices
+            .iter()
+            .any(|device| device.name == *device_name)
+        {
+            Some(device_name.clone())
+        } else {
+            println!(
+                "Saved sync input '{}' is unavailable; using the default input instead",
+                device_name
+            );
+            None
+        }
+    })
+}
+
+fn show_sync_input_group(
+    ui: &mut egui::Ui,
+    selected_device_name: &mut String,
+    group_label: &str,
+    devices: &[&AudioInputDevice],
+) {
+    if devices.is_empty() {
+        return;
+    }
+
+    ui.separator();
+    ui.label(egui::RichText::new(group_label).weak());
+    for device in devices {
+        ui.selectable_value(
+            selected_device_name,
+            device.name.clone(),
+            device.name.as_str(),
+        );
+    }
+}
+
+fn show_system_source_group(
+    ui: &mut egui::Ui,
+    selected_source_name: &mut String,
+    group_label: &str,
+    sources: &[&SystemAudioSource],
+) {
+    if sources.is_empty() {
+        return;
+    }
+
+    ui.separator();
+    ui.label(egui::RichText::new(group_label).weak());
+    for source in sources {
+        ui.selectable_value(selected_source_name, source.name.clone(), source.label.as_str())
+            .on_hover_text(source.name.as_str());
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_system_command(program: &str, args: &[&str]) -> Result<String, String> {
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| format!("Failed to launch {}: {:?}", program, e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "{} {:?} failed with status {}: {}",
+            program,
+            args,
+            output.status,
+            stderr.trim()
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[cfg(target_os = "linux")]
+fn label_for_system_source(name: &str) -> String {
+    let is_monitor = name.ends_with(".monitor");
+    let trimmed_name = name.trim_end_matches(".monitor");
+    let parts: Vec<&str> = trimmed_name.split("__").collect();
+    if let Some(device_name) = parts.get(parts.len().saturating_sub(2)) {
+        let readable = device_name.replace('_', " ");
+        if is_monitor {
+            format!("{} monitor", readable)
+        } else {
+            readable
+        }
+    } else {
+        name.to_owned()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn available_system_audio_sources() -> Vec<SystemAudioSource> {
+    let output = match run_system_command("pactl", &["list", "short", "sources"]) {
+        Ok(output) => output,
+        Err(err) => {
+            println!("Failed to enumerate system audio sources: {}", err);
+            return Vec::new();
+        }
+    };
+
+    let mut sources: Vec<_> = output
+        .lines()
+        .filter_map(|line| {
+            let mut columns = line.split_whitespace();
+            columns.next()?;
+            let name = columns.next()?.to_owned();
+            Some(SystemAudioSource {
+                label: label_for_system_source(&name),
+                is_monitor: name.ends_with(".monitor"),
+                name,
+            })
+        })
+        .collect();
+    sources.sort_by(|left, right| {
+        right
+            .is_monitor
+            .cmp(&left.is_monitor)
+            .then_with(|| left.label.to_ascii_lowercase().cmp(&right.label.to_ascii_lowercase()))
+    });
+    sources
+}
+
+#[cfg(not(target_os = "linux"))]
+fn available_system_audio_sources() -> Vec<SystemAudioSource> {
+    Vec::new()
+}
+
+#[cfg(target_os = "linux")]
+fn current_radiance_source_output_id() -> Result<String, String> {
+    let output = run_system_command("pactl", &["list", "source-outputs"])?;
+    for block in output.split("\n\n") {
+        if block.contains("application.name = \"PipeWire ALSA [radiance]\"")
+            || block.contains("node.name = \"alsa_capture.radiance\"")
+        {
+            if let Some(header) = block.lines().next() {
+                if let Some(id) = header.trim().strip_prefix("Source Output #") {
+                    return Ok(id.trim().to_owned());
+                }
+            }
+        }
+    }
+    Err("Could not find the active Radiance capture stream".to_owned())
+}
+
+#[cfg(target_os = "linux")]
+fn default_system_audio_source_name() -> Result<String, String> {
+    run_system_command("pactl", &["get-default-source"]).map(|output| output.trim().to_owned())
+}
+
+#[cfg(target_os = "linux")]
+fn move_radiance_capture_to_system_source(source_name: Option<&str>) -> Result<Option<String>, String> {
+    let target_source_name = match source_name {
+        Some(name) => name.to_owned(),
+        None => default_system_audio_source_name()?,
+    };
+    let source_output_id = current_radiance_source_output_id()?;
+    run_system_command(
+        "pactl",
+        &["move-source-output", source_output_id.as_str(), target_source_name.as_str()],
+    )?;
+    Ok(Some(target_source_name))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn move_radiance_capture_to_system_source(_source_name: Option<&str>) -> Result<Option<String>, String> {
+    Err("System source routing is only available on Linux".to_owned())
+}
+
+fn selected_system_source_label(
+    selected_source_name: &str,
+    available_sources: &[SystemAudioSource],
+) -> String {
+    if selected_source_name == DEFAULT_SYSTEM_SOURCE_LABEL {
+        return DEFAULT_SYSTEM_SOURCE_LABEL.to_owned();
+    }
+
+    available_sources
+        .iter()
+        .find(|source| source.name == selected_source_name)
+        .map(|source| source.label.clone())
+        .unwrap_or_else(|| selected_source_name.to_owned())
 }
 
 fn main() {
@@ -132,7 +369,9 @@ struct App<'a> {
     library_newly_opened: bool,
     insertion_point: InsertionPoint,
     selected_device_name: String,
-    available_devices: Vec<String>,
+    available_devices: Vec<AudioInputDevice>,
+    selected_system_source_name: String,
+    available_system_sources: Vec<SystemAudioSource>,
     preview_images: HashMap<NodeId, egui::TextureId>,
     winit_output: WinitOutput<'a>,
     app_ui: Option<AppUi>, // Stuff we can't make until we have a window
@@ -180,10 +419,19 @@ impl App<'_> {
 
         load_default_library(&resource_dir);
 
+        let available_devices = Mir::available_input_devices();
+        let available_system_sources = available_system_audio_sources();
+        let app_settings = read_app_settings(&resource_dir).unwrap_or_else(|err_string| {
+            println!("Failed to read app settings ({})", err_string);
+            AppSettings::default()
+        });
+        let restored_device_name = restore_sync_input_device(&app_settings, &available_devices);
+
         // RADIANCE, WOO
 
         // Make a Mir
-        let mir = Mir::new();
+        let mir = Mir::new_with_device(restored_device_name);
+        let selected_device_name = selected_sync_input_label(mir.selected_device_name_option());
 
         // Make context
         let ctx = Context::new(resource_dir.clone(), &device, &queue);
@@ -345,8 +593,10 @@ impl App<'_> {
             left_panel_expanded: false,
             library_newly_opened: false,
             insertion_point: Default::default(),
-            selected_device_name: "Default".to_owned(),
-            available_devices: Mir::available_input_devices(),
+            selected_device_name,
+            available_devices,
+            selected_system_source_name: DEFAULT_SYSTEM_SOURCE_LABEL.to_owned(),
+            available_system_sources,
             preview_images: Default::default(),
             winit_output,
             app_ui: None,
@@ -776,6 +1026,20 @@ impl App<'_> {
                                     ui.image((self.waveform_texture.unwrap(), waveform_size));
                                     ui.image((self.spectrum_texture.unwrap(), spectrum_size));
                                     ui.image((self.beat_texture.unwrap(), beat_size));
+                                    ui.label("Beat lock:");
+                                    let beat_lock_text = if music_info.beat_locked {
+                                        "Locked"
+                                    } else {
+                                        "No lock"
+                                    };
+                                    let beat_lock_color = if music_info.beat_locked {
+                                        egui::Color32::from_rgb(94, 201, 126)
+                                    } else {
+                                        egui::Color32::from_rgb(230, 184, 79)
+                                    };
+                                    ui.colored_label(beat_lock_color, beat_lock_text).on_hover_text(
+                                        "Locked means the incoming audio is driving beat time. No lock means Radiance is still running on fallback tempo until it finds stable beats.",
+                                    );
                                     ui.checkbox(&mut self.auto_dj_1_enabled, "Auto DJ 1");
                                     ui.checkbox(&mut self.auto_dj_2_enabled, "Auto DJ 2");
 
@@ -813,34 +1077,151 @@ impl App<'_> {
                                             .suffix("s")
                                             .range(0. ..=1.),
                                     );
-                                    ui.label("Audio input:");
+                                    ui.label("Sync input:");
                                     let prev_device = self.selected_device_name.clone();
                                     let combo = egui::ComboBox::from_id_salt("audio input device")
                                         .selected_text(self.selected_device_name.as_str())
                                         .show_ui(ui, |ui| {
+                                            let likely_microphones: Vec<_> = self
+                                                .available_devices
+                                                .iter()
+                                                .filter(|device| {
+                                                    device.kind == InputDeviceKind::Microphone
+                                                })
+                                                .collect();
+                                            let likely_loopback_inputs: Vec<_> = self
+                                                .available_devices
+                                                .iter()
+                                                .filter(|device| {
+                                                    device.kind == InputDeviceKind::Loopback
+                                                })
+                                                .collect();
+                                            let other_inputs: Vec<_> = self
+                                                .available_devices
+                                                .iter()
+                                                .filter(|device| device.kind == InputDeviceKind::Other)
+                                                .collect();
+
                                             ui.selectable_value(
                                                 &mut self.selected_device_name,
-                                                "Default".to_owned(),
-                                                "Default",
+                                                DEFAULT_AUDIO_INPUT_LABEL.to_owned(),
+                                                DEFAULT_AUDIO_INPUT_LABEL,
                                             );
-                                            for name in &self.available_devices {
-                                                ui.selectable_value(
-                                                    &mut self.selected_device_name,
-                                                    name.clone(),
-                                                    name.as_str(),
-                                                );
-                                            }
+                                            show_sync_input_group(
+                                                ui,
+                                                &mut self.selected_device_name,
+                                                "Likely microphones",
+                                                &likely_microphones,
+                                            );
+                                            show_sync_input_group(
+                                                ui,
+                                                &mut self.selected_device_name,
+                                                "Likely loopback / monitor inputs",
+                                                &likely_loopback_inputs,
+                                            );
+                                            show_sync_input_group(
+                                                ui,
+                                                &mut self.selected_device_name,
+                                                "Other inputs",
+                                                &other_inputs,
+                                            );
                                         });
                                     if combo.response.clicked() {
                                         self.available_devices = Mir::available_input_devices();
                                     }
                                     if self.selected_device_name != prev_device {
-                                        let device = if self.selected_device_name == "Default" {
+                                        let device = if self.selected_device_name
+                                            == DEFAULT_AUDIO_INPUT_LABEL
+                                        {
                                             None
                                         } else {
                                             Some(self.selected_device_name.clone())
                                         };
                                         self.mir.switch_device(device);
+                                        self.selected_device_name =
+                                            selected_sync_input_label(self.mir.selected_device_name_option());
+                                        write_app_settings(
+                                            &self.ctx.resource_dir,
+                                            &AppSettings {
+                                                sync_input_device_name: self
+                                                    .mir
+                                                    .selected_device_name_option()
+                                                    .map(str::to_owned),
+                                            },
+                                        );
+                                    }
+                                    if !self.available_system_sources.is_empty() {
+                                        ui.label("System source:");
+                                        let prev_system_source =
+                                            self.selected_system_source_name.clone();
+                                        let system_source_combo = egui::ComboBox::from_id_salt(
+                                            "system audio source",
+                                        )
+                                        .selected_text(selected_system_source_label(
+                                            self.selected_system_source_name.as_str(),
+                                            &self.available_system_sources,
+                                        ))
+                                        .show_ui(ui, |ui| {
+                                            let monitor_sources: Vec<_> = self
+                                                .available_system_sources
+                                                .iter()
+                                                .filter(|source| source.is_monitor)
+                                                .collect();
+                                            let other_sources: Vec<_> = self
+                                                .available_system_sources
+                                                .iter()
+                                                .filter(|source| !source.is_monitor)
+                                                .collect();
+
+                                            ui.selectable_value(
+                                                &mut self.selected_system_source_name,
+                                                DEFAULT_SYSTEM_SOURCE_LABEL.to_owned(),
+                                                DEFAULT_SYSTEM_SOURCE_LABEL,
+                                            );
+                                            show_system_source_group(
+                                                ui,
+                                                &mut self.selected_system_source_name,
+                                                "Monitor / loopback sources",
+                                                &monitor_sources,
+                                            );
+                                            show_system_source_group(
+                                                ui,
+                                                &mut self.selected_system_source_name,
+                                                "Other system sources",
+                                                &other_sources,
+                                            );
+                                        });
+                                        if system_source_combo.response.clicked() {
+                                            self.available_system_sources =
+                                                available_system_audio_sources();
+                                        }
+                                        if self.selected_system_source_name != prev_system_source {
+                                            let requested_source = if self.selected_system_source_name
+                                                == DEFAULT_SYSTEM_SOURCE_LABEL
+                                            {
+                                                None
+                                            } else {
+                                                Some(self.selected_system_source_name.as_str())
+                                            };
+                                            match move_radiance_capture_to_system_source(
+                                                requested_source,
+                                            ) {
+                                                Ok(actual_source_name) => {
+                                                    self.selected_system_source_name =
+                                                        actual_source_name.unwrap_or_else(|| {
+                                                            DEFAULT_SYSTEM_SOURCE_LABEL.to_owned()
+                                                        });
+                                                }
+                                                Err(err) => {
+                                                    println!(
+                                                        "Failed to switch Radiance system source: {}",
+                                                        err
+                                                    );
+                                                    self.selected_system_source_name =
+                                                        prev_system_source;
+                                                }
+                                            }
+                                        }
                                     }
                                 });
                             });

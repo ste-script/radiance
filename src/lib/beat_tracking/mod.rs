@@ -638,6 +638,10 @@ impl HMMBeatTrackingProcessor {
         self.tracking = 0;
     }
 
+    pub fn is_locked(&self) -> bool {
+        self.tracking >= MIN_TRACKED_BEATS
+    }
+
     /// Take in an observation
     /// Returns the forward variables for this timestep
     fn hmm_forward(&mut self, observation: f32) -> DVector<f32> {
@@ -848,6 +852,7 @@ impl BeatTracker {
         DVector<f32>, // Spectrogram: size = SPECTROGRAM_SIZE
         f32,          // Activation
         bool,         // Beat
+        bool,         // Beat lock
     )> {
         let frames = self.framed_processor.process(samples);
         frames
@@ -861,8 +866,9 @@ impl BeatTracker {
                 let activation =
                     ensemble_activations.sum::<f32>() / self.neural_networks.len() as f32;
                 let beat = self.hmm.process(activation);
+                let beat_locked = self.hmm.is_locked();
                 let (spectrum, audio) = self.levels.process(&filtered);
-                (audio, spectrum, activation, beat)
+                (audio, spectrum, activation, beat, beat_locked)
             })
             .collect()
     }
@@ -1336,7 +1342,7 @@ mod tests {
             2035, 2084, 2132, 2180,
         ];
 
-        for (i, &(_, _, _, beat)) in beats.iter().enumerate() {
+        for (i, &(_, _, _, beat, _)) in beats.iter().enumerate() {
             //println!("{}: expected {}, got {}", i, expected_beat_indices.contains(&i), beat);
             assert_eq!(beat, expected_beat_indices.contains(&i));
         }

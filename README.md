@@ -20,6 +20,8 @@ Bring your own video clips and images. Radiance integrates the powerful video pl
 
 Connect Radiance to your sound system for music-reactive visuals. Radiance performs beat detection on the incoming audio, and uses this as the global timebase. This means that every effect will automatically be "on the beat" and will slow down or speed up along with the music.
 
+Radiance listens to the selected audio input device for sync. That can be a microphone, an interface input, or a loopback/monitor source. Use the `Sync input` selector in the top bar to choose the device you want the effects to follow.
+
 ### Performance-ready
 Radiance is designed with live performance in mind. Patterns are easy to create and tweak on the fly. Output to one or more screens or use the built-in projection mapping editor.
 

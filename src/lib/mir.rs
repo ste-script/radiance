@@ -15,8 +15,74 @@ const MAX_BPS: f32 = 215. / 60.;
 
 pub const SPECTRUM_LENGTH: usize = N_FILTERS;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum InputDeviceKind {
+    Microphone,
+    Loopback,
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudioInputDevice {
+    pub name: String,
+    pub kind: InputDeviceKind,
+}
+
+impl AudioInputDevice {
+    fn from_name(name: String) -> Self {
+        Self {
+            kind: InputDeviceKind::classify(&name),
+            name,
+        }
+    }
+}
+
+impl InputDeviceKind {
+    fn classify(name: &str) -> Self {
+        let normalized_name = name.to_ascii_lowercase();
+        let loopback_keywords = [
+            "monitor",
+            "loopback",
+            "stereo mix",
+            "what u hear",
+            "blackhole",
+            "soundflower",
+            "vb-audio",
+            "cable output",
+        ];
+        if loopback_keywords
+            .iter()
+            .any(|keyword| normalized_name.contains(keyword))
+        {
+            return Self::Loopback;
+        }
+
+        let microphone_keywords = [
+            "microphone",
+            " mic",
+            "mic ",
+            "headset",
+            "webcam",
+            "built-in input",
+            "built in input",
+            "internal mic",
+            "array",
+        ];
+        if normalized_name == "mic"
+            || microphone_keywords
+                .iter()
+                .any(|keyword| normalized_name.contains(keyword))
+        {
+            return Self::Microphone;
+        }
+
+        Self::Other
+    }
+}
+
 /// A Mir (Music information retrieval) object
-/// handles listening to the music via the system audio
+/// handles listening to a live audio input device, such as a
+/// microphone or loopback/monitor input,
 /// and generates a global timebase from the beats,
 /// along with other relevant real-time inputs based on the music
 /// such as the low, mid, high, and overall audio level.
@@ -54,6 +120,7 @@ struct Update {
     // For computing the audio levels
     audio: AudioLevels,
     spectrum: [f32; SPECTRUM_LENGTH],
+    beat_locked: bool,
 }
 
 impl Update {
@@ -76,6 +143,7 @@ pub struct MusicInfo {
     pub tempo: f32,                       // beats per second
     pub audio: AudioLevels,
     pub spectrum: [f32; SPECTRUM_LENGTH],
+    pub beat_locked: bool,
 }
 
 impl Default for Mir {
@@ -85,6 +153,17 @@ impl Default for Mir {
 }
 
 impl Mir {
+    fn default_update() -> Update {
+        Update {
+            wall_ref: time::Instant::now(),
+            t_ref: 0.,
+            tempo: DEFAULT_BPM / 60.,
+            audio: Default::default(),
+            spectrum: [0.; SPECTRUM_LENGTH],
+            beat_locked: false,
+        }
+    }
+
     fn audio_input(
         sender: mpsc::SyncSender<Update>,
         device_name: Option<&str>,
@@ -167,6 +246,7 @@ impl Mir {
             tempo: DEFAULT_BPM / 60.,
             audio: Default::default(),
             spectrum: [0.; SPECTRUM_LENGTH],
+            beat_locked: false,
         };
 
         // Make a new beat tracker
@@ -178,11 +258,11 @@ impl Mir {
             // but we do this reduction just to be safe,
             // in case the audio frames returned are really large
             let recent_result = bt.process(data).into_iter().reduce(
-                |(_, _, _, beat_acc), (audio, spectrum, activation, beat)| {
-                    (audio, spectrum, activation, beat_acc || beat)
+                |(_, _, _, beat_acc, _), (audio, spectrum, activation, beat, beat_locked)| {
+                    (audio, spectrum, activation, beat_acc || beat, beat_locked)
                 },
             );
-            let (audio, spectrum, _activation, beat) = match recent_result {
+            let (audio, spectrum, _activation, beat, beat_locked) = match recent_result {
                 Some(result) => result,
                 None => {
                     return;
@@ -222,6 +302,7 @@ impl Mir {
 
             update.audio = audio;
             update.spectrum = spectrum.data.as_vec().to_vec().try_into().unwrap();
+            update.beat_locked = beat_locked;
 
             // Send an update back to the main thread
             if let Err(err) = sender.try_send(update.clone()) {
@@ -306,38 +387,51 @@ impl Mir {
     }
 
     pub fn new() -> Self {
+        Self::new_with_device(None)
+    }
+
+    pub fn new_with_device(device_name: Option<String>) -> Self {
         // Make a communication channel to communicate with the audio thread
         const MESSAGE_BUFFER_SIZE: usize = 16;
         let (sender, receiver) = mpsc::sync_channel(MESSAGE_BUFFER_SIZE);
 
-        // Set up system audio
-        let (stream, last_update) = match Self::audio_input(sender, None) {
+        let requested_device_name = device_name;
+
+        // Set up audio input
+        let (stream, last_update, selected_device_name) = match Self::audio_input(
+            sender.clone(),
+            requested_device_name.as_deref(),
+        ) {
             Ok(stream) => (
                 Some(stream),
-                Update {
-                    wall_ref: time::Instant::now(),
-                    t_ref: 0.,
-                    tempo: DEFAULT_BPM / 60.,
-                    audio: Default::default(),
-                    spectrum: [0.; SPECTRUM_LENGTH],
-                },
+                Self::default_update(),
+                requested_device_name,
             ),
             Err(e) => {
-                println!("MIR: {}", e);
-                println!(
-                    "MIR: Proceeding with no audio input at a constant BPM of {}",
-                    DEFAULT_BPM
-                );
-                (
-                    None,
-                    Update {
-                        wall_ref: time::Instant::now(),
-                        t_ref: 0.,
-                        tempo: DEFAULT_BPM / 60., // Run at a constant BPM
-                        audio: Default::default(),
-                        spectrum: [0.; SPECTRUM_LENGTH],
-                    },
-                )
+                if let Some(name) = requested_device_name.as_deref() {
+                    println!("MIR: Failed to use requested audio input '{}': {}", name, e);
+                    match Self::audio_input(sender, None) {
+                        Ok(stream) => {
+                            println!("MIR: Falling back to the default audio input");
+                            (Some(stream), Self::default_update(), None)
+                        }
+                        Err(fallback_err) => {
+                            println!("MIR: {}", fallback_err);
+                            println!(
+                                "MIR: Proceeding with no audio input at a constant BPM of {}",
+                                DEFAULT_BPM
+                            );
+                            (None, Self::default_update(), None)
+                        }
+                    }
+                } else {
+                    println!("MIR: {}", e);
+                    println!(
+                        "MIR: Proceeding with no audio input at a constant BPM of {}",
+                        DEFAULT_BPM
+                    );
+                    (None, Self::default_update(), None)
+                }
             }
         };
 
@@ -347,16 +441,28 @@ impl Mir {
             last_update,
             global_timescale: 1.,
             latency_compensation: 0.1,
-            selected_device_name: None,
+            selected_device_name,
         }
     }
 
-    pub fn available_input_devices() -> Vec<String> {
+    pub fn available_input_devices() -> Vec<AudioInputDevice> {
         let host = cpal::default_host();
         match host.input_devices() {
-            Ok(devices) => devices
-                .filter_map(|d| d.description().ok().map(|desc| desc.name().to_string()))
-                .collect(),
+            Ok(devices) => {
+                let mut devices: Vec<_> = devices
+                    .filter_map(|d| {
+                        d.description()
+                            .ok()
+                            .map(|desc| AudioInputDevice::from_name(desc.name().to_string()))
+                    })
+                    .collect();
+                devices.sort_by(|left, right| {
+                    left.kind
+                        .cmp(&right.kind)
+                        .then_with(|| left.name.to_ascii_lowercase().cmp(&right.name.to_ascii_lowercase()))
+                });
+                devices
+            }
             Err(e) => {
                 println!("MIR: Failed to enumerate input devices: {:?}", e);
                 Vec::new()
@@ -364,10 +470,14 @@ impl Mir {
         }
     }
 
+    pub fn selected_device_name_option(&self) -> Option<&str> {
+        self.selected_device_name.as_deref()
+    }
+
     pub fn selected_device_name(&self) -> &str {
         match &self.selected_device_name {
             Some(name) => name.as_str(),
-            None => "Default",
+            None => "Default input",
         }
     }
 
@@ -380,8 +490,9 @@ impl Mir {
         // Create a new channel and stream
         const MESSAGE_BUFFER_SIZE: usize = 16;
         let (sender, receiver) = mpsc::sync_channel(MESSAGE_BUFFER_SIZE);
+        let requested_device_name = self.selected_device_name.clone();
 
-        match Self::audio_input(sender, self.selected_device_name.as_deref()) {
+        match Self::audio_input(sender.clone(), requested_device_name.as_deref()) {
             Ok(stream) => {
                 println!(
                     "MIR: Switched to audio device: {}",
@@ -391,10 +502,30 @@ impl Mir {
                 self.receiver = receiver;
             }
             Err(e) => {
-                println!("MIR: Failed to switch audio device: {}", e);
-                println!("MIR: Proceeding with no audio input");
-                self._stream = None;
-                self.receiver = receiver;
+                if let Some(name) = requested_device_name.as_deref() {
+                    println!("MIR: Failed to switch to audio device '{}': {}", name, e);
+                    match Self::audio_input(sender, None) {
+                        Ok(stream) => {
+                            println!("MIR: Falling back to the default audio input");
+                            self.selected_device_name = None;
+                            self._stream = Some(stream);
+                            self.receiver = receiver;
+                        }
+                        Err(fallback_err) => {
+                            println!("MIR: {}", fallback_err);
+                            println!("MIR: Proceeding with no audio input");
+                            self.selected_device_name = None;
+                            self._stream = None;
+                            self.receiver = receiver;
+                        }
+                    }
+                } else {
+                    println!("MIR: Failed to switch audio device: {}", e);
+                    println!("MIR: Proceeding with no audio input");
+                    self.selected_device_name = None;
+                    self._stream = None;
+                    self.receiver = receiver;
+                }
             }
         }
     }
@@ -430,6 +561,7 @@ impl Mir {
             tempo: self.last_update.tempo * self.global_timescale,
             audio: self.last_update.audio.clone(),
             spectrum: self.last_update.spectrum.clone(),
+            beat_locked: self.last_update.beat_locked,
         }
     }
 }
