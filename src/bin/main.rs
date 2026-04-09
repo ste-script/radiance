@@ -1195,17 +1195,34 @@ impl App<'_> {
                 .any(|node_id| !self.last_preview_paint_results.contains_key(node_id))
     }
 
-    fn update_preview_textures(
+    fn refresh_preview_paint_cache(
         &mut self,
         radiance_paint_results: &HashMap<NodeId, ArcTextureViewSampler>,
+    ) {
+        self.last_preview_paint_results
+            .retain(|node_id, _| self.props.graph.nodes.contains(node_id));
+
+        for node_id in self.props.graph.nodes.iter().copied() {
+            if let Some(texture) = radiance_paint_results.get(&node_id) {
+                self.last_preview_paint_results.insert(node_id, texture.clone());
+            } else {
+                self.last_preview_paint_results
+                    .entry(node_id)
+                    .or_insert_with(|| self.fallback_preview_texture.clone());
+            }
+        }
+    }
+
+    fn update_preview_textures(
+        &mut self,
+        preview_paint_results: &HashMap<NodeId, ArcTextureViewSampler>,
     ) {
         let graph_nodes = self.props.graph.nodes.clone();
         let preview_sources: Vec<_> = graph_nodes
             .iter()
             .map(|node_id| {
-                let texture = radiance_paint_results
+                let texture = preview_paint_results
                     .get(node_id)
-                    .or_else(|| self.last_preview_paint_results.get(node_id))
                     .unwrap_or(&self.fallback_preview_texture);
                 (*node_id, texture.view.clone())
             })
@@ -1407,8 +1424,9 @@ impl App<'_> {
                         .write_stage_end(&mut offscreen_encoder, submission, gpu_stage_index);
                 }
 
-                self.update_preview_textures(&radiance_preview_paint_results);
-                self.last_preview_paint_results = radiance_preview_paint_results;
+                self.refresh_preview_paint_cache(&radiance_preview_paint_results);
+                let preview_paint_cache = self.last_preview_paint_results.clone();
+                self.update_preview_textures(&preview_paint_cache);
                 gpu_stage_index += 1;
             }
 
