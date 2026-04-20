@@ -1659,7 +1659,7 @@ impl App<'_> {
     }
 
     fn update_auto_dj_flows(&mut self) {
-        let flow_node_ids: HashSet<NodeId> = self
+        let mut flow_node_ids: Vec<NodeId> = self
             .props
             .node_props
             .iter()
@@ -1668,9 +1668,18 @@ impl App<'_> {
                 _ => None,
             })
             .collect();
+        flow_node_ids.sort();
+
+        let flow_node_ids_set: HashSet<NodeId> = flow_node_ids.iter().copied().collect();
 
         self.auto_dj_flows
-            .retain(|node_id, _| flow_node_ids.contains(node_id));
+            .retain(|node_id, _| flow_node_ids_set.contains(node_id));
+
+        let mut claimed_nodes: HashSet<NodeId> = self
+            .auto_dj_flows
+            .values()
+            .flat_map(|auto_dj| auto_dj.chain_node_ids())
+            .collect();
 
         let mut broken_node_ids = Vec::new();
         for node_id in flow_node_ids {
@@ -1683,7 +1692,17 @@ impl App<'_> {
                 continue;
             }
 
-            let auto_dj = self.auto_dj_flows.entry(node_id).or_insert_with(AutoDJ::new);
+            match self.auto_dj_flows.entry(node_id) {
+                Entry::Occupied(_) => {}
+                Entry::Vacant(vacant) => {
+                    let auto_dj = AutoDJ::try_recover_from_graph(&self.props, &claimed_nodes)
+                        .unwrap_or_else(AutoDJ::new);
+                    claimed_nodes.extend(auto_dj.chain_node_ids());
+                    vacant.insert(auto_dj);
+                }
+            }
+
+            let auto_dj = self.auto_dj_flows.get_mut(&node_id).unwrap();
             auto_dj.update(&mut self.props);
             if auto_dj.is_broken() {
                 broken_node_ids.push(node_id);

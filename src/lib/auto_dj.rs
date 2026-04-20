@@ -5,6 +5,7 @@ use crate::props::{NodeProps, Props};
 
 use rand::{prelude::SliceRandom, Rng};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 const STABLE_EFFECT_COUNT: usize = 6;
 
@@ -1119,6 +1120,200 @@ impl AutoDJ {
         AutoDJ {
             state: AutoDJState::Pending,
         }
+    }
+
+    pub fn chain_node_ids(&self) -> Vec<NodeId> {
+        let mut ids = Vec::new();
+        if let AutoDJState::Running(running) = &self.state {
+            ids.push(running.left_placeholder);
+            ids.push(running.right_placeholder);
+            match &running.action {
+                AutoDJAction::Stable(stable) => {
+                    ids.extend(stable.effects.iter().map(|e| e.id));
+                }
+                AutoDJAction::Crossfade(crossfade) => {
+                    ids.extend(crossfade.effects.iter().map(|e| e.id));
+                }
+            }
+        }
+        ids
+    }
+
+    fn from_recovered_chain(left_placeholder: NodeId, right_placeholder: NodeId, effects: Vec<AutoDJEffect>) -> Option<Self> {
+        match effects.len() {
+            STABLE_EFFECT_COUNT => {
+                let effects: [AutoDJEffect; STABLE_EFFECT_COUNT] = effects.try_into().ok()?;
+                Some(AutoDJ {
+                    state: AutoDJState::Running(AutoDJRunning {
+                        left_placeholder,
+                        right_placeholder,
+                        action: AutoDJAction::Stable(AutoDJStable {
+                            effects,
+                            timer: Self::stable_timer(),
+                        }),
+                    }),
+                })
+            }
+            n if n == STABLE_EFFECT_COUNT + 1 => {
+                let effects: [AutoDJEffect; STABLE_EFFECT_COUNT + 1] = effects.try_into().ok()?;
+
+                // Deterministic guess: highest-intensity node is fading in, lowest is fading out.
+                let fade_in_ix = effects
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.target_intensity.total_cmp(&b.1.target_intensity))
+                    .map(|(ix, _)| ix)
+                    .unwrap_or(0);
+                let fade_out_ix = effects
+                    .iter()
+                    .enumerate()
+                    .min_by(|a, b| a.1.target_intensity.total_cmp(&b.1.target_intensity))
+                    .map(|(ix, _)| ix)
+                    .unwrap_or(0);
+
+                Some(AutoDJ {
+                    state: AutoDJState::Running(AutoDJRunning {
+                        left_placeholder,
+                        right_placeholder,
+                        action: AutoDJAction::Crossfade(AutoDJCrossfade {
+                            effects,
+                            fade_in_ix,
+                            fade_out_ix,
+                            start_timer: CROSSFADE_TIMER,
+                            timer: CROSSFADE_TIMER,
+                        }),
+                    }),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    pub fn try_recover_from_graph(props: &Props, claimed_nodes: &HashSet<NodeId>) -> Option<Self> {
+        let mut outputs: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+
+        for edge in &props.graph.edges {
+            if edge.input != 0 {
+                continue;
+            }
+            outputs.entry(edge.from).or_default().push(edge.to);
+        }
+
+        for nexts in outputs.values_mut() {
+            nexts.sort();
+            nexts.dedup();
+        }
+
+        fn dfs_effect_path(
+            props: &Props,
+            outputs: &HashMap<NodeId, Vec<NodeId>>,
+            claimed_nodes: &HashSet<NodeId>,
+            current: NodeId,
+            max_depth: usize,
+            visited: &mut HashSet<NodeId>,
+            effects: &mut Vec<AutoDJEffect>,
+        ) -> Option<NodeId> {
+            let depth = effects.len();
+            if depth >= STABLE_EFFECT_COUNT {
+                let nexts = outputs.get(&current)?;
+                for &next in nexts {
+                    if claimed_nodes.contains(&next) || visited.contains(&next) {
+                        continue;
+                    }
+                    if matches!(props.node_props.get(&next), Some(NodeProps::PlaceholderNode(_))) {
+                        return Some(next);
+                    }
+                }
+                if depth >= max_depth {
+                    return None;
+                }
+            }
+
+            if depth >= max_depth {
+                return None;
+            }
+
+            let nexts = outputs.get(&current)?;
+            for &next in nexts {
+                if claimed_nodes.contains(&next) || visited.contains(&next) {
+                    continue;
+                }
+
+                let target_intensity = match props.node_props.get(&next) {
+                    Some(NodeProps::EffectNode(effect_props)) => effect_props.intensity.unwrap_or(0.5),
+                    _ => continue,
+                };
+
+                visited.insert(next);
+                effects.push(AutoDJEffect {
+                    id: next,
+                    target_intensity,
+                });
+
+                if let Some(right_placeholder) =
+                    dfs_effect_path(props, outputs, claimed_nodes, next, max_depth, visited, effects)
+                {
+                    return Some(right_placeholder);
+                }
+
+                effects.pop();
+                visited.remove(&next);
+            }
+
+            None
+        }
+
+        let mut left_placeholders: Vec<NodeId> = props
+            .node_props
+            .iter()
+            .filter_map(|(node_id, node_props)| {
+                if matches!(node_props, NodeProps::PlaceholderNode(_)) {
+                    Some(*node_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        left_placeholders.sort();
+
+        for left_placeholder in left_placeholders {
+            let node_props = match props.node_props.get(&left_placeholder) {
+                Some(node_props) => node_props,
+                None => continue,
+            };
+            if claimed_nodes.contains(&left_placeholder)
+                || !matches!(node_props, NodeProps::PlaceholderNode(_))
+            {
+                continue;
+            }
+
+            if outputs.get(&left_placeholder).is_none() {
+                continue;
+            }
+
+            let mut visited = HashSet::new();
+            visited.insert(left_placeholder);
+            let mut effects_vec: Vec<AutoDJEffect> = Vec::with_capacity(STABLE_EFFECT_COUNT);
+
+            let right_placeholder = match dfs_effect_path(
+                props,
+                &outputs,
+                claimed_nodes,
+                left_placeholder,
+                STABLE_EFFECT_COUNT + 1,
+                &mut visited,
+                &mut effects_vec,
+            ) {
+                Some(right) => right,
+                None => continue,
+            };
+
+            if let Some(auto_dj) = Self::from_recovered_chain(left_placeholder, right_placeholder, effects_vec) {
+                return Some(auto_dj);
+            }
+        }
+
+        None
     }
 
     fn pick_new_node(ix: usize) -> (NodeProps, AutoDJEffect) {
