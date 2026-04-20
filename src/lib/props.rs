@@ -1,3 +1,4 @@
+use crate::auto_dj_flow_node::AutoDJFlowNodeProps;
 use crate::effect_node::EffectNodeProps;
 use crate::graph::{Graph, NodeId};
 use crate::image_node::ImageNodeProps;
@@ -27,6 +28,7 @@ use std::collections::{HashMap, HashSet};
 #[serde(tag = "type")]
 #[try_into(owned, ref, ref_mut)]
 pub enum NodeProps {
+    AutoDJFlowNode(AutoDJFlowNodeProps),
     EffectNode(EffectNodeProps),
     ScreenOutputNode(ScreenOutputNodeProps),
     UiBgNode(UiBgNodeProps),
@@ -45,6 +47,7 @@ pub struct CommonNodeProps {
 impl From<&NodeProps> for CommonNodeProps {
     fn from(props: &NodeProps) -> Self {
         match props {
+            NodeProps::AutoDJFlowNode(p) => p.into(),
             NodeProps::EffectNode(p) => p.into(),
             NodeProps::ScreenOutputNode(p) => p.into(),
             NodeProps::UiBgNode(p) => p.into(),

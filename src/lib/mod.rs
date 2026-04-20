@@ -1,4 +1,5 @@
 mod auto_dj;
+mod auto_dj_flow_node;
 mod beat_tracking;
 mod context;
 mod effect_node;
@@ -17,6 +18,7 @@ mod screen_output_node;
 mod ui_bg_node;
 
 pub use crate::auto_dj::*;
+pub use crate::auto_dj_flow_node::*;
 pub use crate::beat_tracking::*;
 pub use crate::context::*;
 pub use crate::effect_node::*;

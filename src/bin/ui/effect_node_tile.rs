@@ -2,7 +2,7 @@ use egui::{
     pos2, vec2, Align, Color32, ComboBox, Layout, Rect, RichText, Shape, Slider, Spinner,
     TextureId, Ui, UiBuilder,
 };
-use radiance::{EffectNodeProps, EffectNodeState};
+use radiance::{EffectNodeProps, EffectNodeState, AnimationMode};
 
 const PREVIEW_ASPECT_RATIO: f32 = 1.;
 const NORMAL_HEIGHT: f32 = 240.;
@@ -22,6 +22,7 @@ pub struct EffectNodeTile<'a> {
     preview_image: TextureId,
     intensity: &'a mut Option<f32>, // TODO turn these Options into a more holistic enum based on EffectNodeState
     frequency: &'a mut Option<f32>,
+    animation_mode: &'a mut AnimationMode,
     state: EffectNodeTileState,
 }
 
@@ -59,6 +60,7 @@ impl<'a> EffectNodeTile<'a> {
             preview_image,
             intensity: &mut props.intensity,
             frequency: &mut props.frequency,
+            animation_mode: &mut props.animation_mode,
             state: tile_state,
         }
     }
@@ -70,6 +72,7 @@ impl<'a> EffectNodeTile<'a> {
             preview_image,
             intensity,
             frequency,
+            animation_mode,
             state,
         } = self;
         ui.add(
@@ -85,6 +88,17 @@ impl<'a> EffectNodeTile<'a> {
                 intensity
                     .as_mut()
                     .map(|intensity| ui.add(Slider::new(intensity, 0.0..=1.0).show_value(false)));
+
+                // Animation mode selector
+                ComboBox::from_id_salt("animation_mode")
+                    .width(ui.available_width())
+                    .selected_text(format!("Anim: {:?}", animation_mode))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(animation_mode, AnimationMode::None, "None");
+                        ui.selectable_value(animation_mode, AnimationMode::SineWave, "Sine Wave");
+                        ui.selectable_value(animation_mode, AnimationMode::BeatSync, "Beat Sync");
+                        ui.selectable_value(animation_mode, AnimationMode::Ramp, "Ramp");
+                    });
 
                 frequency.as_mut().map(|frequency| {
                     let frequencies: &[f32] = &[0., 0.125, 0.25, 0.5, 1., 2., 4., 8.];

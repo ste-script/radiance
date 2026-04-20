@@ -4,6 +4,7 @@ use crate::placeholder_node::PlaceholderNodeProps;
 use crate::props::{NodeProps, Props};
 
 use rand::{prelude::SliceRandom, Rng};
+use serde::{Deserialize, Serialize};
 
 const STABLE_EFFECT_COUNT: usize = 6;
 
@@ -18,10 +19,11 @@ struct AutoDJEffectDescriptor {
     intensity_min: f32,
     intensity_max: f32,
     random_frequency: bool,
+    is_heavy: bool,
 }
 
-#[derive(Debug, PartialEq)]
-enum AutoDJEffectCategory {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AutoDJEffectCategory {
     DontUse,
     Generative,
     ComplectSpace,
@@ -30,12 +32,138 @@ enum AutoDJEffectCategory {
     SimplifyColor,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoDJTimingConfig {
+    #[serde(default = "default_stable_timer_min")]
+    pub stable_timer_min: usize,
+    #[serde(default = "default_stable_timer_max")]
+    pub stable_timer_max: usize,
+    #[serde(default = "default_crossfade_timer")]
+    pub crossfade_timer: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoDJSlotConfig {
+    #[serde(default = "default_slot_allowed_effect_categories")]
+    pub allowed_effect_categories: Vec<AutoDJEffectCategory>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoDJSceneConfig {
+    #[serde(default = "default_scene_name")]
+    pub name: String,
+    #[serde(default = "default_scene_slots")]
+    pub slots: Vec<AutoDJSlotConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoDJFlowConfig {
+    #[serde(default = "default_autodj_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub timing: AutoDJTimingConfig,
+    #[serde(default = "default_autodj_scenes")]
+    pub scenes: Vec<AutoDJSceneConfig>,
+    #[serde(default)]
+    pub active_scene: usize,
+}
+
+impl Default for AutoDJTimingConfig {
+    fn default() -> Self {
+        Self {
+            stable_timer_min: STABLE_TIMER_MIN,
+            stable_timer_max: STABLE_TIMER_MAX,
+            crossfade_timer: CROSSFADE_TIMER,
+        }
+    }
+}
+
+impl Default for AutoDJSlotConfig {
+    fn default() -> Self {
+        Self {
+            allowed_effect_categories: default_slot_allowed_effect_categories(),
+        }
+    }
+}
+
+impl Default for AutoDJSceneConfig {
+    fn default() -> Self {
+        Self {
+            name: default_scene_name(),
+            slots: default_scene_slots(),
+        }
+    }
+}
+
+impl Default for AutoDJFlowConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            timing: AutoDJTimingConfig::default(),
+            scenes: default_autodj_scenes(),
+            active_scene: 0,
+        }
+    }
+}
+
+fn default_stable_timer_min() -> usize {
+    STABLE_TIMER_MIN
+}
+
+fn default_stable_timer_max() -> usize {
+    STABLE_TIMER_MAX
+}
+
+fn default_crossfade_timer() -> usize {
+    CROSSFADE_TIMER
+}
+
+fn default_autodj_enabled() -> bool {
+    true
+}
+
+fn default_scene_name() -> String {
+    "Scene 1".to_owned()
+}
+
+fn default_slot_allowed_effect_categories() -> Vec<AutoDJEffectCategory> {
+    vec![AutoDJEffectCategory::ComplectSpace]
+}
+
+fn default_slot_allowed_effect_categories_for_ix(ix: usize) -> Vec<AutoDJEffectCategory> {
+    match ix {
+        0 => vec![AutoDJEffectCategory::SimplifySpace],
+        1 => vec![AutoDJEffectCategory::SimplifyColor],
+        2 => vec![AutoDJEffectCategory::ComplectSpace],
+        3 => vec![AutoDJEffectCategory::SimplifyColor],
+        4 => vec![
+            AutoDJEffectCategory::SimplifySpace,
+            AutoDJEffectCategory::ComplectColor,
+        ],
+        5 => vec![AutoDJEffectCategory::SimplifySpace],
+        _ => vec![AutoDJEffectCategory::SimplifySpace],
+    }
+}
+
+fn default_scene_slots() -> Vec<AutoDJSlotConfig> {
+    (0..STABLE_EFFECT_COUNT)
+        .map(|ix| AutoDJSlotConfig {
+            allowed_effect_categories: default_slot_allowed_effect_categories_for_ix(ix),
+        })
+        .collect()
+}
+
+fn default_autodj_scenes() -> Vec<AutoDJSceneConfig> {
+    vec![AutoDJSceneConfig::default()]
+}
+
 const EFFECT_DESCRIPTOR_DEFAULT: AutoDJEffectDescriptor = AutoDJEffectDescriptor {
     name: "",
     category: AutoDJEffectCategory::DontUse,
     intensity_min: 0.2,
     intensity_max: 1.,
     random_frequency: true,
+    is_heavy: false,
 };
 
 const EFFECTS: &[AutoDJEffectDescriptor] = &[
@@ -233,6 +361,7 @@ const EFFECTS: &[AutoDJEffectDescriptor] = &[
     AutoDJEffectDescriptor {
         name: "dwwave",
         category: AutoDJEffectCategory::Generative,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
@@ -258,11 +387,13 @@ const EFFECTS: &[AutoDJEffectDescriptor] = &[
     AutoDJEffectDescriptor {
         name: "fire",
         category: AutoDJEffectCategory::Generative,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
         name: "fireball",
         category: AutoDJEffectCategory::Generative,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
@@ -294,6 +425,7 @@ const EFFECTS: &[AutoDJEffectDescriptor] = &[
     AutoDJEffectDescriptor {
         name: "fractalzoom",
         category: AutoDJEffectCategory::ComplectSpace,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
@@ -334,6 +466,7 @@ const EFFECTS: &[AutoDJEffectDescriptor] = &[
     AutoDJEffectDescriptor {
         name: "halftone",
         category: AutoDJEffectCategory::DontUse, // Exaerbates high spatial frequencies
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
@@ -371,11 +504,13 @@ const EFFECTS: &[AutoDJEffectDescriptor] = &[
     AutoDJEffectDescriptor {
         name: "inception",
         category: AutoDJEffectCategory::DontUse, // Some weird high frequencies when ramping up
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
         name: "interstellar",
         category: AutoDJEffectCategory::Generative,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
@@ -392,6 +527,7 @@ const EFFECTS: &[AutoDJEffectDescriptor] = &[
     AutoDJEffectDescriptor {
         name: "kaleidoscope",
         category: AutoDJEffectCategory::ComplectSpace,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
@@ -402,27 +538,32 @@ const EFFECTS: &[AutoDJEffectDescriptor] = &[
     AutoDJEffectDescriptor {
         name: "lathe",
         category: AutoDJEffectCategory::DontUse, // Exacerbates high spatial frequencies
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
         name: "life",
         category: AutoDJEffectCategory::ComplectSpace,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
         name: "litebrite",
         category: AutoDJEffectCategory::DontUse, // Exacerbates high spatial frequencies
         random_frequency: false,                 // Too bouncey
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
         name: "loopy",
         category: AutoDJEffectCategory::Generative,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
         name: "lorenz",
         category: AutoDJEffectCategory::ComplectSpace,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
@@ -518,6 +659,7 @@ const EFFECTS: &[AutoDJEffectDescriptor] = &[
         name: "pixelate",
         category: AutoDJEffectCategory::DontUse,
         random_frequency: false,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     }, // Amplifies high frequencies
     AutoDJEffectDescriptor {
@@ -545,6 +687,7 @@ const EFFECTS: &[AutoDJEffectDescriptor] = &[
     AutoDJEffectDescriptor {
         name: "projector",
         category: AutoDJEffectCategory::DontUse,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     }, // Too computationally intensive
     AutoDJEffectDescriptor {
@@ -718,6 +861,7 @@ const EFFECTS: &[AutoDJEffectDescriptor] = &[
     AutoDJEffectDescriptor {
         name: "starfield",
         category: AutoDJEffectCategory::Generative,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
@@ -840,6 +984,7 @@ const EFFECTS: &[AutoDJEffectDescriptor] = &[
     AutoDJEffectDescriptor {
         name: "wave",
         category: AutoDJEffectCategory::Generative,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
@@ -855,6 +1000,7 @@ const EFFECTS: &[AutoDJEffectDescriptor] = &[
     AutoDJEffectDescriptor {
         name: "wwave",
         category: AutoDJEffectCategory::Generative,
+        is_heavy: true,
         ..EFFECT_DESCRIPTOR_DEFAULT
     },
     AutoDJEffectDescriptor {
@@ -981,30 +1127,31 @@ impl AutoDJ {
         let descriptor_options = match ix {
             0 => EFFECTS
                 .iter()
-                .filter(|e| e.category == AutoDJEffectCategory::ComplectSpace)
+                .filter(|e| e.category == AutoDJEffectCategory::SimplifySpace && !e.is_heavy)
                 .collect::<Vec<_>>(),
             1 => EFFECTS
                 .iter()
-                .filter(|e| e.category == AutoDJEffectCategory::ComplectColor)
+                .filter(|e| e.category == AutoDJEffectCategory::SimplifyColor && !e.is_heavy)
                 .collect::<Vec<_>>(),
             2 => EFFECTS
                 .iter()
-                .filter(|e| e.category == AutoDJEffectCategory::ComplectSpace)
+                .filter(|e| e.category == AutoDJEffectCategory::ComplectSpace && !e.is_heavy)
                 .collect::<Vec<_>>(),
             3 => EFFECTS
                 .iter()
-                .filter(|e| e.category == AutoDJEffectCategory::SimplifyColor)
+                .filter(|e| e.category == AutoDJEffectCategory::SimplifyColor && !e.is_heavy)
                 .collect::<Vec<_>>(),
             4 => EFFECTS
                 .iter()
                 .filter(|e| {
-                    e.category == AutoDJEffectCategory::SimplifySpace
-                        || e.category == AutoDJEffectCategory::ComplectColor
+                    (e.category == AutoDJEffectCategory::SimplifySpace
+                        || e.category == AutoDJEffectCategory::ComplectColor)
+                        && !e.is_heavy
                 })
                 .collect::<Vec<_>>(),
             5 => EFFECTS
                 .iter()
-                .filter(|e| e.category == AutoDJEffectCategory::SimplifySpace)
+                .filter(|e| e.category == AutoDJEffectCategory::SimplifySpace && !e.is_heavy)
                 .collect::<Vec<_>>(),
             _ => panic!("Don't know how to handle AutoDJ slot {}", ix),
         };

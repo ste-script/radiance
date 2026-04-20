@@ -1,3 +1,4 @@
+mod auto_dj_flow_node_tile;
 mod beat_widget;
 mod bg;
 mod drop_target;

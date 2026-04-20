@@ -13,6 +13,20 @@ const EFFECT_HEADER: &str = include_str!("effect_header.wgsl");
 const EFFECT_FOOTER: &str = include_str!("effect_footer.wgsl");
 const INTENSITY_INTEGRAL_PERIOD: f32 = 1024.;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AnimationMode {
+    None,
+    SineWave,
+    BeatSync,
+    Ramp,
+}
+
+impl Default for AnimationMode {
+    fn default() -> Self {
+        AnimationMode::None
+    }
+}
+
 /// Properties of an EffectNode.
 /// Fields that are None are set to their default when the shader is loaded.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -21,6 +35,8 @@ pub struct EffectNodeProps {
     pub intensity: Option<f32>,
     pub frequency: Option<f32>,
     pub input_count: Option<u32>,
+    #[serde(default)]
+    pub animation_mode: AnimationMode,
 }
 
 impl From<&EffectNodeProps> for CommonNodeProps {
@@ -95,6 +111,19 @@ fn handle_shader_error(error: wgpu::Error) {
 // This is a state machine, it's more natural to use `match` than `if let`
 #[allow(clippy::single_match)]
 impl EffectNodeState {
+    fn animated_intensity(mode: AnimationMode, time: f32, frequency: f32, audio_level: f32) -> f32 {
+        match mode {
+            AnimationMode::None => 0.0,
+            AnimationMode::SineWave => {
+                // `time` is in beats, so frequency controls cycles per beat.
+                0.5 + 0.5 * (std::f32::consts::TAU * time * frequency).sin()
+            }
+            AnimationMode::BeatSync => (audio_level * 1.25).clamp(0.0, 1.0),
+            // iTime in shaders wraps every 16 beats, so mirror that behavior here.
+            AnimationMode::Ramp => (time * frequency / 16.0).fract(),
+        }
+    }
+
     fn setup_render_pipeline(
         ctx: &Context,
         device: &wgpu::Device,
@@ -552,6 +581,15 @@ impl EffectNodeState {
                         self_ready.frequency = frequency;
                     }
                     _ => {}
+                }
+
+                if props.animation_mode != AnimationMode::None {
+                    self_ready.intensity = Self::animated_intensity(
+                        props.animation_mode,
+                        ctx.time,
+                        self_ready.frequency,
+                        ctx.audio.level,
+                    );
                 }
 
                 // Report back to the caller what our props are

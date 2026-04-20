@@ -1,4 +1,4 @@
-use radiance::{Context, EffectNodeProps, ImageNodeProps, NodeProps};
+use radiance::{AutoDJFlowNodeProps, Context, EffectNodeProps, ImageNodeProps, NodeProps};
 use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "mpv")]
@@ -39,14 +39,15 @@ impl PartialEq for LibraryItem {
 // for easy comparison
 fn node_type_index(props: &NodeProps) -> u8 {
     match props {
-        NodeProps::EffectNode(_) => 0,
-        NodeProps::ImageNode(_) => 1,
+        NodeProps::AutoDJFlowNode(_) => 0,
+        NodeProps::EffectNode(_) => 1,
+        NodeProps::ImageNode(_) => 2,
         #[cfg(feature = "mpv")]
-        NodeProps::MovieNode(_) => 2,
-        NodeProps::UiBgNode(_) => 3,
-        NodeProps::ScreenOutputNode(_) => 4,
-        NodeProps::ProjectionMappedOutputNode(_) => 5,
-        NodeProps::PlaceholderNode(_) => 6,
+        NodeProps::MovieNode(_) => 3,
+        NodeProps::UiBgNode(_) => 4,
+        NodeProps::ScreenOutputNode(_) => 5,
+        NodeProps::ProjectionMappedOutputNode(_) => 6,
+        NodeProps::PlaceholderNode(_) => 7,
     }
 }
 
@@ -159,6 +160,7 @@ pub fn library_ui(ui: &mut egui::Ui, ctx: &Context, newly_opened: bool) -> Libra
         .show(ui, |ui| {
             for (idx, item) in library_memory.filtered_items.iter().enumerate() {
                 let icon = match item.node_props {
+                    NodeProps::AutoDJFlowNode(_) => "\u{23EF}",
                     NodeProps::ImageNode(_) => "\u{1F5BC}",
                     #[cfg(feature = "mpv")]
                     NodeProps::MovieNode(_) => "\u{1F3A5}",
@@ -223,6 +225,11 @@ fn library_contents_from_filesystem(ctx: &Context) -> Vec<LibraryItem> {
         .collect();
     contents.sort();
     contents.extend([
+        LibraryItem {
+            name: "AutoDJFlow".to_owned(),
+            node_props: NodeProps::AutoDJFlowNode(AutoDJFlowNodeProps::default()),
+            custom: false,
+        },
         LibraryItem {
             name: "UiBg".to_owned(),
             node_props: NodeProps::UiBgNode(Default::default()),

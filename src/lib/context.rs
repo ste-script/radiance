@@ -1,3 +1,4 @@
+use crate::auto_dj_flow_node::AutoDJFlowNodeState;
 use crate::effect_node::EffectNodeState;
 use crate::image_node::ImageNodeState;
 
@@ -125,6 +126,7 @@ pub struct RenderTargetState {
 #[try_into(owned, ref, ref_mut)]
 #[allow(clippy::large_enum_variant)]
 pub enum NodeState {
+    AutoDJFlowNode(AutoDJFlowNodeState),
     EffectNode(EffectNodeState),
     ScreenOutputNode(ScreenOutputNodeState),
     UiBgNode(UiBgNodeState),
@@ -286,6 +288,9 @@ impl Context {
         node_props: &NodeProps,
     ) -> NodeState {
         match node_props {
+            NodeProps::AutoDJFlowNode(props) => {
+                NodeState::AutoDJFlowNode(AutoDJFlowNodeState::new(self, device, queue, props))
+            }
             NodeProps::EffectNode(props) => {
                 NodeState::EffectNode(EffectNodeState::new(self, device, queue, props))
             }
@@ -320,6 +325,12 @@ impl Context {
     ) {
         let mut node_state = self.node_states.remove(&node_id).unwrap();
         match node_state {
+            NodeState::AutoDJFlowNode(ref mut state) => match node_props {
+                NodeProps::AutoDJFlowNode(ref mut props) => {
+                    state.update(self, device, queue, props)
+                }
+                _ => panic!("Type mismatch between props and state"),
+            },
             NodeState::EffectNode(ref mut state) => match node_props {
                 NodeProps::EffectNode(ref mut props) => state.update(self, device, queue, props),
                 _ => panic!("Type mismatch between props and state"),
@@ -370,6 +381,14 @@ impl Context {
     ) -> ArcTextureViewSampler {
         let mut node_state = self.node_states.remove(&node_id).unwrap();
         let result = match node_state {
+            NodeState::AutoDJFlowNode(ref mut state) => state.paint(
+                self,
+                device,
+                queue,
+                encoder,
+                render_target_id,
+                input_textures,
+            ),
             NodeState::EffectNode(ref mut state) => state.paint(
                 self,
                 device,

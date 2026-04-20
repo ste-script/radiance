@@ -1,5 +1,6 @@
 #![allow(clippy::single_match)]
 
+use crate::ui::auto_dj_flow_node_tile::AutoDJFlowNodeTile;
 use crate::ui::drop_target::DropTarget;
 use crate::ui::effect_node_tile::EffectNodeTile;
 use crate::ui::image_node_tile::ImageNodeTile;
@@ -171,6 +172,7 @@ impl LayoutCache {
             .map(|&tile_id| {
                 let props = props.node_props.get(&tile_id.node).unwrap();
                 let heights = match props {
+                    NodeProps::AutoDJFlowNode(p) => AutoDJFlowNodeTile::min_input_heights(p),
                     NodeProps::EffectNode(p) => EffectNodeTile::min_input_heights(p),
                     NodeProps::ScreenOutputNode(p) => ScreenOutputNodeTile::min_input_heights(p),
                     NodeProps::UiBgNode(p) => UiBgNodeTile::min_input_heights(p),
@@ -291,6 +293,9 @@ impl LayoutCache {
                 let height: f32 = *heights.get(&tile_id).unwrap();
                 let node_props = props.node_props.get(&tile_id.node).unwrap();
                 let width = match node_props {
+                    NodeProps::AutoDJFlowNode(p) => {
+                        AutoDJFlowNodeTile::width_for_height(p, height)
+                    }
                     NodeProps::EffectNode(p) => EffectNodeTile::width_for_height(p, height),
                     NodeProps::ScreenOutputNode(p) => {
                         ScreenOutputNodeTile::width_for_height(p, height)
@@ -1028,6 +1033,10 @@ where
         let node_props = props.node_props.get_mut(&node_id).unwrap();
 
         let InnerResponse { inner: _, response } = tile.show(ui, |ui| match node_props {
+            NodeProps::AutoDJFlowNode(p) => {
+                AutoDJFlowNodeTile::new(p, node_state.try_into().unwrap(), preview_image)
+                    .add_contents(ui)
+            }
             NodeProps::EffectNode(p) => {
                 EffectNodeTile::new(p, node_state.try_into().unwrap(), preview_image)
                     .add_contents(ui)

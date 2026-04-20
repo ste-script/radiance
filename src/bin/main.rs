@@ -9,7 +9,7 @@ extern crate nalgebra as na;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, read_to_string, File};
 use std::io::{ErrorKind, Write};
 use std::path::Path;
@@ -25,7 +25,7 @@ use winit::window::{Window, WindowId};
 
 use radiance::{
     ArcTextureViewSampler, AudioInputDevice, AutoDJ, Context, InputDeviceKind, InsertionPoint,
-    Mir, MusicInfo, NodeId, Props, RenderTarget, RenderTargetId,
+    Mir, MusicInfo, NodeId, NodeProps, Props, RenderTarget, RenderTargetId,
 };
 
 mod ui;
@@ -864,6 +864,7 @@ struct App<'a> {
     props: Props,
     auto_dj_1: Option<AutoDJ>,
     auto_dj_2: Option<AutoDJ>,
+    auto_dj_flows: HashMap<NodeId, AutoDJ>,
     auto_dj_1_enabled: bool,
     auto_dj_2_enabled: bool,
     autosave_timer: usize,
@@ -1143,6 +1144,7 @@ impl App<'_> {
             props,
             auto_dj_1: None,
             auto_dj_2: None,
+            auto_dj_flows: HashMap::new(),
             auto_dj_1_enabled: false,
             auto_dj_2_enabled: false,
             autosave_timer: 0,
@@ -1300,6 +1302,7 @@ impl App<'_> {
             .chain(self.winit_output.render_targets_iter())
             .map(|(k, v)| (*k, v.clone()))
             .collect();
+        self.update_auto_dj_flows();
         self.auto_dj_1.as_mut().map(|a| {
             a.update(&mut self.props);
 
@@ -1653,6 +1656,38 @@ impl App<'_> {
         perf_sample.presented_windows += 1;
         did_vsync = true;
         self.finish_frame(frame_start, perf_sample, did_vsync)
+    }
+
+    fn update_auto_dj_flows(&mut self) {
+        let enabled_flow_node_ids: HashSet<NodeId> = self
+            .props
+            .node_props
+            .iter()
+            .filter_map(|(node_id, node_props)| match node_props {
+                NodeProps::AutoDJFlowNode(props) if props.config.enabled => Some(*node_id),
+                _ => None,
+            })
+            .collect();
+
+        self.auto_dj_flows
+            .retain(|node_id, _| enabled_flow_node_ids.contains(node_id));
+
+        let mut broken_node_ids = Vec::new();
+        for node_id in enabled_flow_node_ids {
+            let auto_dj = self.auto_dj_flows.entry(node_id).or_insert_with(AutoDJ::new);
+            auto_dj.update(&mut self.props);
+            if auto_dj.is_broken() {
+                broken_node_ids.push(node_id);
+            }
+        }
+
+        for node_id in broken_node_ids {
+            self.auto_dj_flows.remove(&node_id);
+            if let Some(NodeProps::AutoDJFlowNode(props)) = self.props.node_props.get_mut(&node_id)
+            {
+                props.config.enabled = false;
+            }
+        }
     }
 
     fn ui(&mut self, music_info: &MusicInfo) {
