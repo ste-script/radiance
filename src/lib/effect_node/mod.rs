@@ -111,16 +111,30 @@ fn handle_shader_error(error: wgpu::Error) {
 // This is a state machine, it's more natural to use `match` than `if let`
 #[allow(clippy::single_match)]
 impl EffectNodeState {
-    fn animated_intensity(mode: AnimationMode, time: f32, frequency: f32, audio_level: f32) -> f32 {
+    fn animated_intensity(
+        mode: AnimationMode,
+        time: f32,
+        frequency: f32,
+        audio_level: f32,
+        base_intensity: f32,
+    ) -> f32 {
         match mode {
-            AnimationMode::None => 0.0,
+            AnimationMode::None => base_intensity,
             AnimationMode::SineWave => {
+                if frequency <= 0.0 {
+                    return base_intensity;
+                }
                 // `time` is in beats, so frequency controls cycles per beat.
                 0.5 + 0.5 * (std::f32::consts::TAU * time * frequency).sin()
             }
             AnimationMode::BeatSync => (audio_level * 1.25).clamp(0.0, 1.0),
             // iTime in shaders wraps every 16 beats, so mirror that behavior here.
-            AnimationMode::Ramp => (time * frequency / 16.0).fract(),
+            AnimationMode::Ramp => {
+                if frequency <= 0.0 {
+                    return base_intensity;
+                }
+                (time * frequency / 16.0).fract()
+            }
         }
     }
 
@@ -589,6 +603,7 @@ impl EffectNodeState {
                         ctx.time,
                         self_ready.frequency,
                         ctx.audio.level,
+                        self_ready.intensity,
                     );
                 }
 

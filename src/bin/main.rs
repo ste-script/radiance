@@ -1659,21 +1659,30 @@ impl App<'_> {
     }
 
     fn update_auto_dj_flows(&mut self) {
-        let enabled_flow_node_ids: HashSet<NodeId> = self
+        let flow_node_ids: HashSet<NodeId> = self
             .props
             .node_props
             .iter()
             .filter_map(|(node_id, node_props)| match node_props {
-                NodeProps::AutoDJFlowNode(props) if props.config.enabled => Some(*node_id),
+                NodeProps::AutoDJFlowNode(_) => Some(*node_id),
                 _ => None,
             })
             .collect();
 
         self.auto_dj_flows
-            .retain(|node_id, _| enabled_flow_node_ids.contains(node_id));
+            .retain(|node_id, _| flow_node_ids.contains(node_id));
 
         let mut broken_node_ids = Vec::new();
-        for node_id in enabled_flow_node_ids {
+        for node_id in flow_node_ids {
+            let enabled = match self.props.node_props.get(&node_id) {
+                Some(NodeProps::AutoDJFlowNode(props)) => props.config.enabled,
+                _ => false,
+            };
+
+            if !enabled {
+                continue;
+            }
+
             let auto_dj = self.auto_dj_flows.entry(node_id).or_insert_with(AutoDJ::new);
             auto_dj.update(&mut self.props);
             if auto_dj.is_broken() {
